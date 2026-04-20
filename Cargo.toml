@@ -1,0 +1,57 @@
+[package]
+name = "ufox-llm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "面向生产环境的多 Provider LLM Rust SDK"
+readme = "README.md"
+keywords = ["llm", "openai", "qwen", "sdk", "ai"]
+categories = ["api-bindings", "asynchronous"]
+
+[lib]
+name = "ufox_llm"
+path = "src/lib.rs"
+
+[workspace]
+resolver = "3"
+
+[features]
+default = ["openai", "qwen", "compatible", "rustls-tls"]
+openai = []
+qwen = []
+compatible = ["openai"]
+rustls-tls = ["reqwest/rustls-tls", "reqwest/rustls-tls-native-roots"]
+native-tls = ["reqwest/native-tls"]
+
+[dependencies]
+base64 = "0.22"
+eventsource-stream = "0.2"
+futures-util = "0.3"
+mime_guess = "2.0"
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "json", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["full"] }
+tracing = "0.1"
+
+[dev-dependencies]
+anyhow = "1.0"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+needless_pass_by_value = "allow"
+cargo_common_metadata = "allow"
+multiple_crate_versions = "allow"
