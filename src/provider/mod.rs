@@ -7,9 +7,9 @@ use serde_json::Value;
 
 use crate::{ChatResponse, LlmError, Message, StreamChunk, Tool, client::RequestOptions};
 
+pub mod compatible;
 pub mod openai;
 pub mod qwen;
-pub mod compatible;
 
 /// `LLM` 供应商类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -24,7 +24,6 @@ pub enum Provider {
 }
 
 impl Provider {
-    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::OpenAI => "openai",
@@ -33,7 +32,6 @@ impl Provider {
         }
     }
 
-    #[must_use]
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::OpenAI => "OpenAI",
@@ -42,7 +40,6 @@ impl Provider {
         }
     }
 
-    #[must_use]
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
             Self::OpenAI => Some("https://api.openai.com/v1"),
@@ -51,7 +48,6 @@ impl Provider {
         }
     }
 
-    #[must_use]
     pub const fn requires_explicit_base_url(self) -> bool {
         self.default_base_url().is_none()
     }

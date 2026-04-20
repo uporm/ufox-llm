@@ -346,8 +346,14 @@ impl Client {
         tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<ChatResponse, LlmError> {
+        let provider_name = self.adapter.provider_name().to_string();
         let response = self.send_request(messages, tools, false, options).await?;
         let body = response.bytes().await.map_err(LlmError::from)?;
+        tracing::debug!(
+            provider = provider_name.as_str(),
+            response_body = %String::from_utf8_lossy(body.as_ref()),
+            "LLM 非流式响应"
+        );
         self.adapter.parse_chat_response(body.as_ref())
     }
 
@@ -357,16 +363,24 @@ impl Client {
         tools: Option<&[Tool]>,
         options: &RequestOptions,
     ) -> Result<ChatStream, LlmError> {
+        let provider_name = self.adapter.provider_name().to_string();
         let response = self.send_request(messages, tools, true, options).await?;
         let adapter = Arc::clone(&self.adapter);
         let stream = response
             .bytes_stream()
             .eventsource()
             .map(move |event_result| match event_result {
-                Ok(event) => match adapter.parse_stream_chunks(&event.data) {
-                    Ok(chunks) => chunks.into_iter().map(Ok).collect::<Vec<_>>(),
-                    Err(error) => vec![Err(error)],
-                },
+                Ok(event) => {
+                    tracing::debug!(
+                        provider = provider_name.as_str(),
+                        stream_event = %event.data,
+                        "LLM 流式响应事件"
+                    );
+                    match adapter.parse_stream_chunks(&event.data) {
+                        Ok(chunks) => chunks.into_iter().map(Ok).collect::<Vec<_>>(),
+                        Err(error) => vec![Err(error)],
+                    }
+                }
                 Err(error) => vec![Err(LlmError::StreamError(format!(
                     "读取 SSE 事件失败：{error}"
                 )))],
@@ -389,6 +403,22 @@ impl Client {
         let body = self
             .adapter
             .build_chat_request(model, messages, tools, stream, &options)?;
+        let provider_name = self.adapter.provider_name().to_string();
+        let request_body_json = serde_json::to_string(&body).unwrap_or_else(|error| {
+            serde_json::json!({
+                "serialization_error": error.to_string()
+            })
+            .to_string()
+        });
+
+        tracing::debug!(
+            provider = provider_name.as_str(),
+            model,
+            stream,
+            request_url = %url,
+            request_body = %request_body_json,
+            "LLM 请求"
+        );
 
         let mut request = self.http.post(url).json(&body);
         request = request.header("Authorization", format!("Bearer {}", self.api_key()));
@@ -413,11 +443,23 @@ impl Client {
 
         let response = request.send().await.map_err(LlmError::from)?;
         if response.status().is_success() {
+            tracing::debug!(
+                provider = provider_name.as_str(),
+                status = response.status().as_u16(),
+                "LLM 请求成功"
+            );
             Ok(response)
         } else {
             let status = response.status();
             let retry_after = parse_retry_after_header(response.headers());
             let body = response.bytes().await.map_err(LlmError::from)?;
+            tracing::debug!(
+                provider = provider_name.as_str(),
+                status = status.as_u16(),
+                retry_after_secs = retry_after.map(|duration| duration.as_secs()),
+                response_body = %String::from_utf8_lossy(body.as_ref()),
+                "LLM 请求失败"
+            );
             Err(map_http_error(
                 status,
                 retry_after,

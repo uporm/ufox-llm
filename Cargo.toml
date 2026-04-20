@@ -24,19 +24,21 @@ rustls-tls = ["reqwest/rustls-tls", "reqwest/rustls-tls-native-roots"]
 native-tls = ["reqwest/native-tls"]
 
 [dependencies]
-base64 = "0.22"
-eventsource-stream = "0.2"
-futures-util = "0.3"
-mime_guess = "2.0"
-reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "json", "stream"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
-tokio = { version = "1.48", features = ["full"] }
-tracing = "0.1"
+base64 = "0.22.1"
+eventsource-stream = "0.2.3"
+futures-util = "0.3.32"
+mime_guess = "2.0.5"
+reqwest = { version = "0.12.28", default-features = false, features = ["charset", "http2", "json", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tokio = { version = "1.52.1", features = ["full"] }
+tracing = "0.1.44"
 
 [dev-dependencies]
-anyhow = "1.0"
+anyhow = "1.0.102"
+dotenvy = "0.15.7"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 
 [package.metadata.docs.rs]
 all-features = true

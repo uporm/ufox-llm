@@ -26,7 +26,6 @@ pub enum Role {
 }
 
 impl Role {
-    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::System => "system",
@@ -50,12 +49,10 @@ pub enum Content {
 }
 
 impl Content {
-    #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text(text.into())
     }
 
-    #[must_use]
     pub fn parts(parts: Vec<ContentPart>) -> Self {
         Self::Parts(parts)
     }
@@ -63,7 +60,6 @@ impl Content {
     /// 尝试以纯文本形式读取内容。
     ///
     /// 当内容为多模态片段时返回 `None`，因为这类内容无法无损降级为单一字符串。
-    #[must_use]
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text(text) => Some(text.as_str()),
@@ -71,7 +67,6 @@ impl Content {
         }
     }
 
-    #[must_use]
     pub const fn is_multimodal(&self) -> bool {
         matches!(self, Self::Parts(_))
     }
@@ -84,31 +79,22 @@ impl Content {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContentPart {
     /// 文本片段。
-    Text {
-        /// 文本内容。
-        text: String,
-    },
+    Text { text: String },
     /// 图片片段。
-    Image {
-        /// 图片来源描述。
-        source: ImageSource,
-    },
+    Image { source: ImageSource },
 }
 
 impl ContentPart {
-    #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
     }
 
-    #[must_use]
     pub fn image_url(url: impl Into<String>) -> Self {
         Self::Image {
             source: ImageSource::url(url),
         }
     }
 
-    #[must_use]
     pub fn image_file(path: impl Into<PathBuf>) -> Self {
         Self::Image {
             source: ImageSource::file(path),
@@ -132,12 +118,10 @@ pub enum ImageSource {
 }
 
 impl ImageSource {
-    #[must_use]
     pub fn url(url: impl Into<String>) -> Self {
         Self::Url { url: url.into() }
     }
 
-    #[must_use]
     pub fn file(path: impl Into<PathBuf>) -> Self {
         Self::File(ImageFile::new(path))
     }
@@ -153,7 +137,6 @@ pub struct ImageFile {
 }
 
 impl ImageFile {
-    #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let mime_type = guess_mime_type(&path);
@@ -161,12 +144,10 @@ impl ImageFile {
         Self { path, mime_type }
     }
 
-    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    #[must_use]
     pub fn mime_type(&self) -> Option<&str> {
         self.mime_type.as_deref()
     }
@@ -188,7 +169,6 @@ pub struct Message {
 }
 
 impl Message {
-    #[must_use]
     pub fn new(role: Role, content: Content) -> Self {
         Self {
             role,
@@ -199,22 +179,18 @@ impl Message {
         }
     }
 
-    #[must_use]
     pub fn system(text: impl Into<String>) -> Self {
         Self::new(Role::System, Content::text(text))
     }
 
-    #[must_use]
     pub fn user(text: impl Into<String>) -> Self {
         Self::new(Role::User, Content::text(text))
     }
 
-    #[must_use]
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::new(Role::Assistant, Content::text(text))
     }
 
-    #[must_use]
     pub fn assistant_with_tool_calls(tool_calls: &[ToolCall]) -> Self {
         Self {
             role: Role::Assistant,
@@ -225,7 +201,6 @@ impl Message {
         }
     }
 
-    #[must_use]
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,
@@ -239,37 +214,30 @@ impl Message {
     /// 为指定角色创建消息构建器。
     ///
     /// 由于 Rust 不支持同名关联函数的参数重载，多模态构建入口单独提供为构建器。
-    #[must_use]
     pub fn builder(role: Role) -> MessageBuilder {
         MessageBuilder::new(role)
     }
 
-    #[must_use]
     pub const fn role(&self) -> Role {
         self.role
     }
 
-    #[must_use]
     pub const fn content(&self) -> &Content {
         &self.content
     }
 
-    #[must_use]
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
 
-    #[must_use]
     pub fn tool_calls(&self) -> Option<&[ToolCall]> {
         self.tool_calls.as_deref()
     }
 
-    #[must_use]
     pub fn tool_call_id(&self) -> Option<&str> {
         self.tool_call_id.as_deref()
     }
 
-    #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
@@ -288,7 +256,7 @@ pub struct MessageBuilder {
 
 impl MessageBuilder {
     /// 为指定角色创建消息构建器。
-    #[must_use]
+
     pub fn new(role: Role) -> Self {
         Self {
             role,
@@ -297,45 +265,37 @@ impl MessageBuilder {
         }
     }
 
-    #[must_use]
     pub fn user() -> Self {
         Self::new(Role::User)
     }
 
-    #[must_use]
     pub fn system() -> Self {
         Self::new(Role::System)
     }
 
-    #[must_use]
     pub fn assistant() -> Self {
         Self::new(Role::Assistant)
     }
 
-    #[must_use]
     pub const fn role(&self) -> Role {
         self.role
     }
 
-    #[must_use]
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.parts.push(ContentPart::text(text));
         self
     }
 
-    #[must_use]
     pub fn image_url(mut self, url: impl Into<String>) -> Self {
         self.parts.push(ContentPart::image_url(url));
         self
     }
 
-    #[must_use]
     pub fn image_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.parts.push(ContentPart::image_file(path));
         self
     }
 
-    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
@@ -346,7 +306,7 @@ impl MessageBuilder {
     /// 当构建器中仅包含一个文本片段时，SDK 会将其折叠为 [`Content::Text`]。
     /// 这样做的原因是纯文本消息是最常见场景，直接使用字符串可以减少后续 `Provider`
     /// 适配层的分支判断与序列化体积。
-    #[must_use]
+
     pub fn build(self) -> Message {
         let content = match self.parts.as_slice() {
             [ContentPart::Text { text }] => Content::Text(text.clone()),

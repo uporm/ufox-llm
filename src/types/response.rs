@@ -28,7 +28,6 @@ pub enum FinishReason {
 
 impl FinishReason {
     /// 从 `Provider` 返回值创建结束原因。
-    #[must_use]
     pub fn from_provider_value(value: impl AsRef<str>) -> Self {
         match value.as_ref() {
             "stop" => Self::Stop,
@@ -40,7 +39,6 @@ impl FinishReason {
         }
     }
 
-    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Stop => "stop",
@@ -52,7 +50,6 @@ impl FinishReason {
         }
     }
 
-    #[must_use]
     pub const fn is_tool_calls(&self) -> bool {
         matches!(self, Self::ToolCalls)
     }
@@ -86,7 +83,6 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
-    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -125,7 +121,6 @@ pub struct Usage {
 }
 
 impl Usage {
-    #[must_use]
     pub const fn new(prompt_tokens: u32, completion_tokens: u32) -> Self {
         Self {
             prompt: prompt_tokens,
@@ -134,17 +129,14 @@ impl Usage {
         }
     }
 
-    #[must_use]
     pub const fn prompt_tokens(&self) -> u32 {
         self.prompt
     }
 
-    #[must_use]
     pub const fn completion_tokens(&self) -> u32 {
         self.completion
     }
 
-    #[must_use]
     pub const fn total_tokens(&self) -> u32 {
         self.total
     }
@@ -164,7 +156,6 @@ pub struct ChatResponse {
 }
 
 impl ChatResponse {
-    #[must_use]
     pub fn new(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
@@ -177,73 +168,68 @@ impl ChatResponse {
     }
 
     /// 为响应附加思考过程文本。
-    #[must_use]
+
     pub fn with_thinking_content(mut self, thinking_content: impl Into<String>) -> Self {
         self.thinking_content = Some(thinking_content.into());
         self
     }
 
     /// 为响应附加思考阶段消耗的 `token` 数。
-    #[must_use]
+
     pub const fn with_thinking_tokens(mut self, thinking_tokens: u32) -> Self {
         self.thinking_tokens = Some(thinking_tokens);
         self
     }
 
     /// 为响应附加工具调用列表。
-    #[must_use]
+
     pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
         self.tool_calls = Some(tool_calls);
         self
     }
 
     /// 为响应附加结束原因。
-    #[must_use]
+
     pub fn with_finish_reason(mut self, finish_reason: FinishReason) -> Self {
         self.finish_reason = Some(finish_reason);
         self
     }
 
     /// 为响应附加用量信息。
-    #[must_use]
+
     pub fn with_usage(mut self, usage: Usage) -> Self {
         self.usage = Some(usage);
         self
     }
 
-    #[must_use]
     pub fn content(&self) -> &str {
         &self.content
     }
 
-    #[must_use]
     pub fn thinking_content(&self) -> Option<&str> {
         self.thinking_content.as_deref()
     }
 
-    #[must_use]
     pub const fn thinking_tokens(&self) -> Option<u32> {
         self.thinking_tokens
     }
 
-    #[must_use]
     pub fn tool_calls(&self) -> Option<&[ToolCall]> {
         self.tool_calls.as_deref()
     }
 
-    #[must_use]
     pub fn finish_reason(&self) -> Option<&FinishReason> {
         self.finish_reason.as_ref()
     }
 
-    #[must_use]
     pub const fn usage(&self) -> Option<&Usage> {
         self.usage.as_ref()
     }
 
-    #[must_use]
     pub fn has_tool_calls(&self) -> bool {
-        self.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty())
+        self.tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
     }
 }
 
@@ -261,7 +247,6 @@ pub struct StreamChunk {
 }
 
 impl StreamChunk {
-    #[must_use]
     pub fn new(delta: impl Into<String>) -> Self {
         Self {
             delta: delta.into(),
@@ -272,7 +257,6 @@ impl StreamChunk {
         }
     }
 
-    #[must_use]
     pub fn thinking(delta: impl Into<String>) -> Self {
         Self {
             delta: delta.into(),
@@ -287,32 +271,30 @@ impl StreamChunk {
     ///
     /// 这里保存的是当前片段可对外消费的完整工具调用集合，而不是尚未闭合的部分参数碎片。
     /// 这样可以让公开 `API` 保持稳定简单，具体的片段级聚合逻辑放在 `Provider` 层内部完成。
-    #[must_use]
+
     pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
         self.tool_calls = Some(tool_calls);
         self
     }
 
     /// 为流式片段附加结束原因。
-    #[must_use]
+
     pub fn with_finish_reason(mut self, finish_reason: FinishReason) -> Self {
         self.finish_reason = Some(finish_reason);
         self
     }
 
     /// 为流式片段附加用量信息。
-    #[must_use]
+
     pub fn with_usage(mut self, usage: Usage) -> Self {
         self.usage = Some(usage);
         self
     }
 
-    #[must_use]
     pub fn delta(&self) -> &str {
         &self.delta
     }
 
-    #[must_use]
     pub fn delta_type(&self) -> DeltaType {
         match self.delta_kind {
             DeltaKind::Thinking => DeltaType::Thinking(self.delta.clone()),
@@ -320,32 +302,28 @@ impl StreamChunk {
         }
     }
 
-    #[must_use]
     pub const fn is_thinking(&self) -> bool {
         matches!(self.delta_kind, DeltaKind::Thinking)
     }
 
-    #[must_use]
     pub fn tool_calls(&self) -> Option<&[ToolCall]> {
         self.tool_calls.as_deref()
     }
 
-    #[must_use]
     pub fn finish_reason(&self) -> Option<&FinishReason> {
         self.finish_reason.as_ref()
     }
 
-    #[must_use]
     pub const fn usage(&self) -> Option<&Usage> {
         self.usage.as_ref()
     }
 
-    #[must_use]
     pub fn has_tool_calls(&self) -> bool {
-        self.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty())
+        self.tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
     }
 
-    #[must_use]
     pub fn is_terminal(&self) -> bool {
         self.finish_reason.is_some()
     }

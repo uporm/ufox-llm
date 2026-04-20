@@ -31,7 +31,6 @@ pub enum JsonType {
 }
 
 impl JsonType {
-    #[must_use]
     pub fn enumeration<I, S>(values: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -40,46 +39,51 @@ impl JsonType {
         Self::Enum(values.into_iter().map(Into::into).collect())
     }
 
-    #[must_use]
     pub const fn is_enum(&self) -> bool {
         matches!(self, Self::Enum(_))
     }
 }
 
-/// 工具定义。
+/// 工具参数定义。
 ///
-/// 当前 `SDK` 仅支持函数型工具定义，但该结构体保留了稳定的包装层，便于未来扩展更多
-/// 工具种类而不破坏对外 `API`。
+/// 该类型描述函数工具中的单个入参，包括名称、类型、说明和是否必填。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Tool {
-    kind: ToolKind,
-    function: FunctionTool,
+pub struct ToolParameter {
+    name: String,
+    json_type: JsonType,
+    description: String,
+    required: bool,
 }
 
-impl Tool {
-    #[must_use]
-    pub fn function(name: impl Into<String>) -> ToolBuilder {
-        ToolBuilder::new(name)
+impl ToolParameter {
+    pub fn new(
+        name: impl Into<String>,
+        json_type: JsonType,
+        description: impl Into<String>,
+        required: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            json_type,
+            description: description.into(),
+            required,
+        }
     }
 
-    #[must_use]
     pub fn name(&self) -> &str {
-        &self.function.name
+        &self.name
     }
 
-    #[must_use]
-    pub fn description(&self) -> Option<&str> {
-        self.function.description.as_deref()
+    pub const fn json_type(&self) -> &JsonType {
+        &self.json_type
     }
 
-    #[must_use]
-    pub fn parameters(&self) -> &[ToolParameter] {
-        &self.function.parameters
+    pub fn description(&self) -> &str {
+        &self.description
     }
 
-    #[must_use]
-    pub const fn kind(&self) -> ToolKind {
-        self.kind
+    pub const fn required(&self) -> bool {
+        self.required
     }
 }
 
@@ -94,11 +98,49 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Function => "function",
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct FunctionTool {
+    name: String,
+    description: Option<String>,
+    parameters: Vec<ToolParameter>,
+}
+
+/// 工具定义。
+///
+/// 当前 `SDK` 仅支持函数型工具定义，但该结构体保留了稳定的包装层，便于未来扩展更多
+/// 工具种类而不破坏对外 `API`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tool {
+    kind: ToolKind,
+    function: FunctionTool,
+}
+
+impl Tool {
+    pub fn function(name: impl Into<String>) -> ToolBuilder {
+        ToolBuilder::new(name)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.function.name
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.function.description.as_deref()
+    }
+
+    pub fn parameters(&self) -> &[ToolParameter] {
+        &self.function.parameters
+    }
+
+    pub const fn kind(&self) -> ToolKind {
+        self.kind
     }
 }
 
@@ -119,12 +161,10 @@ pub enum ToolChoice {
 }
 
 impl ToolChoice {
-    #[must_use]
     pub fn function(name: impl Into<String>) -> Self {
         Self::Function { name: name.into() }
     }
 
-    #[must_use]
     pub const fn as_str(&self) -> Option<&'static str> {
         match self {
             Self::Auto => Some("auto"),
@@ -134,7 +174,6 @@ impl ToolChoice {
         }
     }
 
-    #[must_use]
     pub fn function_name(&self) -> Option<&str> {
         match self {
             Self::Function { name } => Some(name),
@@ -154,7 +193,6 @@ pub struct ToolBuilder {
 }
 
 impl ToolBuilder {
-    #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -163,18 +201,15 @@ impl ToolBuilder {
         }
     }
 
-    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
-    #[must_use]
     pub fn param(
         mut self,
         name: impl Into<String>,
@@ -192,7 +227,7 @@ impl ToolBuilder {
     }
 
     /// 构建工具定义。
-    #[must_use]
+
     pub fn build(self) -> Tool {
         Tool {
             kind: ToolKind::Function,
@@ -202,54 +237,6 @@ impl ToolBuilder {
                 parameters: self.parameters,
             },
         }
-    }
-}
-
-/// 工具参数定义。
-///
-/// 该类型描述函数工具中的单个入参，包括名称、类型、说明和是否必填。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolParameter {
-    name: String,
-    json_type: JsonType,
-    description: String,
-    required: bool,
-}
-
-impl ToolParameter {
-    #[must_use]
-    pub fn new(
-        name: impl Into<String>,
-        json_type: JsonType,
-        description: impl Into<String>,
-        required: bool,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            json_type,
-            description: description.into(),
-            required,
-        }
-    }
-
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    #[must_use]
-    pub const fn json_type(&self) -> &JsonType {
-        &self.json_type
-    }
-
-    #[must_use]
-    pub fn description(&self) -> &str {
-        &self.description
-    }
-
-    #[must_use]
-    pub const fn required(&self) -> bool {
-        self.required
     }
 }
 
@@ -265,7 +252,6 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    #[must_use]
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -278,17 +264,14 @@ impl ToolCall {
         }
     }
 
-    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }
 
-    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    #[must_use]
     pub fn arguments(&self) -> &str {
         &self.arguments
     }
@@ -312,7 +295,6 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    #[must_use]
     pub fn new(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             tool_call_id: tool_call_id.into(),
@@ -321,7 +303,7 @@ impl ToolResult {
     }
 
     /// 从 `JSON` 值创建工具执行结果。
-    #[must_use]
+
     pub fn json(tool_call_id: impl Into<String>, content: Value) -> Self {
         Self {
             tool_call_id: tool_call_id.into(),
@@ -329,22 +311,13 @@ impl ToolResult {
         }
     }
 
-    #[must_use]
     pub fn tool_call_id(&self) -> &str {
         &self.tool_call_id
     }
 
-    #[must_use]
     pub fn content(&self) -> &str {
         &self.content
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct FunctionTool {
-    name: String,
-    description: Option<String>,
-    parameters: Vec<ToolParameter>,
 }
 
 #[cfg(test)]

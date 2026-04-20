@@ -14,7 +14,7 @@ pub struct OpenAiStreamParser {
 
 impl OpenAiStreamParser {
     /// 创建流式事件解析器。
-    #[must_use]
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -36,10 +36,7 @@ impl OpenAiStreamParser {
     /// # Errors
     /// - [`LlmError::ParseError`]：当事件数据不是合法 `JSON` 时触发
     /// - [`LlmError::StreamError`]：当事件缺少必要字段或工具调用碎片不完整时触发
-    pub fn parse_event_chunks(
-        &mut self,
-        event_data: &str,
-    ) -> Result<Vec<StreamChunk>, LlmError> {
+    pub fn parse_event_chunks(&mut self, event_data: &str) -> Result<Vec<StreamChunk>, LlmError> {
         if is_done_event(event_data) {
             self.reset();
             return Ok(Vec::new());
@@ -164,7 +161,6 @@ impl OpenAiStreamParser {
 }
 
 /// 判断事件是否为 `OpenAI` 的 `[DONE]` 终止标记。
-#[must_use]
 pub fn is_done_event(event_data: &str) -> bool {
     event_data.trim() == "[DONE]"
 }
@@ -433,9 +429,7 @@ mod tests {
         .to_string();
         let mut parser = OpenAiStreamParser::new();
 
-        let chunks = parser
-            .parse_event_chunks(&body)
-            .expect("事件应解析成功");
+        let chunks = parser.parse_event_chunks(&body).expect("事件应解析成功");
 
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].is_thinking());

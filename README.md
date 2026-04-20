@@ -435,10 +435,18 @@ fn handle_result(some_result: Result<(), LlmError>) {
 - `examples/multi_turn.rs`
 - `examples/multimodal.rs`
 - `examples/tool_calling.rs`
+- `examples/tool_options.rs`
 
-运行示例前，请先设置环境变量，例如：
+运行示例前，建议先复制示例环境变量文件：
 
 ```bash
+cp examples/.env.example .env
+cargo run --example basic_chat
+```
+
+或手动设置环境变量：
+
+```bash 
 export UFOX_LLM_PROVIDER=compatible
 export UFOX_LLM_BASE_URL=https://api.deepseek.com/v1
 export UFOX_LLM_API_KEY=sk-xxx

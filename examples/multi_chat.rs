@@ -19,10 +19,13 @@
 use std::env;
 
 use anyhow::{Context, Result, bail};
+use tracing_subscriber::EnvFilter;
 use ufox_llm::{Client, Message, Provider};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
+    let _ = dotenvy::dotenv();
     let provider = read_provider()?;
     let api_key = required_env("UFOX_LLM_API_KEY")?;
     let model = env::var("UFOX_LLM_MODEL").unwrap_or_else(|_| default_model(provider).to_string());
@@ -56,6 +59,16 @@ async fn main() -> Result<()> {
     println!("当前消息历史条数：{}", messages.len());
 
     Ok(())
+}
+
+fn init_tracing() {
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("ufox_llm=debug"));
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_target(false)
+        .try_init();
 }
 
 fn read_provider() -> Result<Provider> {
