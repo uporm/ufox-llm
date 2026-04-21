@@ -82,6 +82,10 @@ pub enum ContentPart {
     Text { text: String },
     /// 图片片段。
     Image { source: ImageSource },
+    /// 音频片段。
+    Audio { source: AudioSource },
+    /// 视频片段。
+    Video { source: VideoSource },
 }
 
 impl ContentPart {
@@ -98,6 +102,30 @@ impl ContentPart {
     pub fn image_file(path: impl Into<PathBuf>) -> Self {
         Self::Image {
             source: ImageSource::file(path),
+        }
+    }
+
+    pub fn audio_url(url: impl Into<String>) -> Self {
+        Self::Audio {
+            source: AudioSource::url(url),
+        }
+    }
+
+    pub fn audio_file(path: impl Into<PathBuf>) -> Self {
+        Self::Audio {
+            source: AudioSource::file(path),
+        }
+    }
+
+    pub fn video_url(url: impl Into<String>) -> Self {
+        Self::Video {
+            source: VideoSource::url(url),
+        }
+    }
+
+    pub fn video_file(path: impl Into<PathBuf>) -> Self {
+        Self::Video {
+            source: VideoSource::file(path),
         }
     }
 }
@@ -127,6 +155,56 @@ impl ImageSource {
     }
 }
 
+/// 音频来源。
+///
+/// 统一抽象远程 `URL` 与本地文件两类来源，便于 `Provider` 层按各自协议进行转换。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AudioSource {
+    /// 远程音频 URL。
+    Url {
+        /// 音频 URL。
+        url: String,
+    },
+    /// 本地音频文件。
+    File(AudioFile),
+}
+
+impl AudioSource {
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url { url: url.into() }
+    }
+
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self::File(AudioFile::new(path))
+    }
+}
+
+/// 视频来源。
+///
+/// 统一抽象远程 `URL` 与本地文件两类来源，便于 `Provider` 层按各自协议进行转换。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VideoSource {
+    /// 远程视频 URL。
+    Url {
+        /// 视频 URL。
+        url: String,
+    },
+    /// 本地视频文件。
+    File(VideoFile),
+}
+
+impl VideoSource {
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url { url: url.into() }
+    }
+
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self::File(VideoFile::new(path))
+    }
+}
+
 /// 本地图片文件描述。
 ///
 /// 该结构体仅保存路径与 `MIME` 类型元数据，不在构造阶段执行 `I/O`。
@@ -137,6 +215,58 @@ pub struct ImageFile {
 }
 
 impl ImageFile {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let mime_type = guess_mime_type(&path);
+
+        Self { path, mime_type }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn mime_type(&self) -> Option<&str> {
+        self.mime_type.as_deref()
+    }
+}
+
+/// 本地音频文件描述。
+///
+/// 该结构体仅保存路径与 `MIME` 类型元数据，不在构造阶段执行 `I/O`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioFile {
+    path: PathBuf,
+    mime_type: Option<String>,
+}
+
+impl AudioFile {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let mime_type = guess_mime_type(&path);
+
+        Self { path, mime_type }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn mime_type(&self) -> Option<&str> {
+        self.mime_type.as_deref()
+    }
+}
+
+/// 本地视频文件描述。
+///
+/// 该结构体仅保存路径与 `MIME` 类型元数据，不在构造阶段执行 `I/O`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoFile {
+    path: PathBuf,
+    mime_type: Option<String>,
+}
+
+impl VideoFile {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let mime_type = guess_mime_type(&path);
@@ -296,6 +426,26 @@ impl MessageBuilder {
         self
     }
 
+    pub fn audio_url(mut self, url: impl Into<String>) -> Self {
+        self.parts.push(ContentPart::audio_url(url));
+        self
+    }
+
+    pub fn audio_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.parts.push(ContentPart::audio_file(path));
+        self
+    }
+
+    pub fn video_url(mut self, url: impl Into<String>) -> Self {
+        self.parts.push(ContentPart::video_url(url));
+        self
+    }
+
+    pub fn video_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.parts.push(ContentPart::video_file(path));
+        self
+    }
+
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
@@ -330,7 +480,9 @@ fn guess_mime_type(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Content, ContentPart, ImageSource, Message, MessageBuilder, Role};
+    use super::{
+        AudioSource, Content, ContentPart, ImageSource, Message, MessageBuilder, Role, VideoSource,
+    };
     use crate::ToolCall;
 
     #[test]
@@ -346,6 +498,8 @@ mod tests {
         let message = Message::builder(Role::User)
             .text("先看文字")
             .image_url("https://example.com/photo.jpg")
+            .audio_url("https://example.com/audio.mp3")
+            .video_url("https://example.com/video.mp4")
             .text("再输出结论")
             .build();
 
@@ -357,7 +511,9 @@ mod tests {
 
         assert!(matches!(parts[0], ContentPart::Text { .. }));
         assert!(matches!(parts[1], ContentPart::Image { .. }));
-        assert!(matches!(parts[2], ContentPart::Text { .. }));
+        assert!(matches!(parts[2], ContentPart::Audio { .. }));
+        assert!(matches!(parts[3], ContentPart::Video { .. }));
+        assert!(matches!(parts[4], ContentPart::Text { .. }));
     }
 
     #[test]
@@ -369,6 +525,28 @@ mod tests {
         };
 
         assert_eq!(file.mime_type(), Some("image/png"));
+    }
+
+    #[test]
+    fn audio_source_2() {
+        let source = AudioSource::file("./fixtures/voice.mp3");
+
+        let AudioSource::File(file) = source else {
+            panic!("预期为文件来源");
+        };
+
+        assert_eq!(file.mime_type(), Some("audio/mpeg"));
+    }
+
+    #[test]
+    fn video_source_2() {
+        let source = VideoSource::file("./fixtures/demo.mp4");
+
+        let VideoSource::File(file) = source else {
+            panic!("预期为文件来源");
+        };
+
+        assert_eq!(file.mime_type(), Some("video/mp4"));
     }
 
     #[test]

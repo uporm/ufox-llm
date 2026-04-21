@@ -1,444 +1,81 @@
-//! Client 构建器与配置类型。
+//! Client 构建器。
 //!
-//! 提供 typestate 构建器，以及 OpenAI/Qwen/Compatible 的配置结构。
+//! 提供客户端构建器，并直接组装 `Client` 的运行时配置字段。
 
-use std::{collections::HashMap, marker::PhantomData, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use crate::Provider;
 
-use super::Client;
+use super::{Client, config::ProviderConfig};
 
-/// 构建器尚未设置 `provider` 的状态标记。
-///
-/// 该标记仅用于 typestate 编译期约束，不承载运行时数据。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct ProviderUnset;
-
-/// 构建器已经设置 `provider` 的状态标记。
-///
-/// 该标记仅用于 typestate 编译期约束，不承载运行时数据。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct ProviderSet;
-
-/// 构建器尚未设置 `api_key` 的状态标记。
-///
-/// 该标记仅用于 typestate 编译期约束，不承载运行时数据。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct ApiKeyUnset;
-
-/// 构建器已经设置 `api_key` 的状态标记。
-///
-/// 该标记仅用于 typestate 编译期约束，不承载运行时数据。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct ApiKeySet;
-
-/// `OpenAI` Provider 配置。
-///
-/// 该配置结构体描述 `OpenAI` 客户端实例的静态配置项。虽然 `organization` 仅对
-/// `OpenAI` 生效，但其余字段语义与其他 Provider 保持对齐，便于上层统一建模。
+/// 客户端构建器。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenAiConfig {
-    api_key: String,
-    base_url: Option<String>,
-    organization: Option<String>,
-    default_model: Option<String>,
-    timeout_secs: Option<u64>,
-    extra_headers: Option<HashMap<String, String>>,
-}
-
-impl OpenAiConfig {
-    #[must_use]
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: None,
-            organization: None,
-            default_model: None,
-            timeout_secs: None,
-            extra_headers: None,
-        }
-    }
-
-    #[must_use]
-    pub fn api_key(&self) -> &str {
-        &self.api_key
-    }
-
-    #[must_use]
-    pub fn base_url(&self) -> Option<&str> {
-        self.base_url.as_deref()
-    }
-
-    #[must_use]
-    pub fn organization(&self) -> Option<&str> {
-        self.organization.as_deref()
-    }
-
-    #[must_use]
-    pub fn default_model(&self) -> Option<&str> {
-        self.default_model.as_deref()
-    }
-
-    #[must_use]
-    pub const fn timeout_secs(&self) -> Option<u64> {
-        self.timeout_secs
-    }
-
-    #[must_use]
-    pub fn extra_headers(&self) -> Option<&HashMap<String, String>> {
-        self.extra_headers.as_ref()
-    }
-}
-
-/// `Qwen` Provider 配置。
-///
-/// 该配置结构体描述 `Qwen` / `DashScope` 客户端实例的静态配置项。`extra_headers`
-/// 常用于配置 `Qwen` 特有的鉴权或流式协商头。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QwenConfig {
-    api_key: String,
-    base_url: Option<String>,
-    organization: Option<String>,
-    default_model: Option<String>,
-    timeout_secs: Option<u64>,
-    extra_headers: Option<HashMap<String, String>>,
-}
-
-impl QwenConfig {
-    #[must_use]
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: None,
-            organization: None,
-            default_model: None,
-            timeout_secs: None,
-            extra_headers: None,
-        }
-    }
-
-    #[must_use]
-    pub fn api_key(&self) -> &str {
-        &self.api_key
-    }
-
-    #[must_use]
-    pub fn base_url(&self) -> Option<&str> {
-        self.base_url.as_deref()
-    }
-
-    #[must_use]
-    pub fn organization(&self) -> Option<&str> {
-        self.organization.as_deref()
-    }
-
-    #[must_use]
-    pub fn default_model(&self) -> Option<&str> {
-        self.default_model.as_deref()
-    }
-
-    #[must_use]
-    pub const fn timeout_secs(&self) -> Option<u64> {
-        self.timeout_secs
-    }
-
-    #[must_use]
-    pub fn extra_headers(&self) -> Option<&HashMap<String, String>> {
-        self.extra_headers.as_ref()
-    }
-}
-
-/// 兼容 `OpenAI` 协议 Provider 配置。
-///
-/// 该配置结构体面向 `DeepSeek`、`Ollama`、自建兼容网关等服务。与官方 `OpenAI`
-/// 不同，这类服务通常要求调用方显式设置 `base_url`。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompatibleConfig {
-    api_key: String,
-    base_url: Option<String>,
-    organization: Option<String>,
-    default_model: Option<String>,
-    timeout_secs: Option<u64>,
-    extra_headers: Option<HashMap<String, String>>,
-}
-
-impl CompatibleConfig {
-    #[must_use]
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: None,
-            organization: None,
-            default_model: None,
-            timeout_secs: None,
-            extra_headers: None,
-        }
-    }
-
-    #[must_use]
-    pub fn api_key(&self) -> &str {
-        &self.api_key
-    }
-
-    #[must_use]
-    pub fn base_url(&self) -> Option<&str> {
-        self.base_url.as_deref()
-    }
-
-    #[must_use]
-    pub fn organization(&self) -> Option<&str> {
-        self.organization.as_deref()
-    }
-
-    #[must_use]
-    pub fn default_model(&self) -> Option<&str> {
-        self.default_model.as_deref()
-    }
-
-    #[must_use]
-    pub const fn timeout_secs(&self) -> Option<u64> {
-        self.timeout_secs
-    }
-
-    #[must_use]
-    pub fn extra_headers(&self) -> Option<&HashMap<String, String>> {
-        self.extra_headers.as_ref()
-    }
-}
-
-/// 统一的 Provider 配置枚举。
-///
-/// 该枚举为后续 `client` 层提供统一的配置读取入口，同时保留各 Provider 的独立配置结构。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderConfig {
-    /// `OpenAI` 配置。
-    OpenAi(OpenAiConfig),
-    /// `Qwen` 配置。
-    Qwen(QwenConfig),
-    /// 兼容 `OpenAI` 协议的配置。
-    Compatible(CompatibleConfig),
-}
-
-impl ProviderConfig {
-    #[must_use]
-    pub const fn provider(&self) -> Provider {
-        match self {
-            Self::OpenAi(_) => Provider::OpenAI,
-            Self::Qwen(_) => Provider::Qwen,
-            Self::Compatible(_) => Provider::Compatible,
-        }
-    }
-}
-
-/// 已解析的客户端配置。
-///
-/// 该结构体是 `ClientBuilder` 的最终产物，会在后续 `Client` 主体实现中作为运行时
-/// 请求发送与协议适配的基础配置载体。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientConfig {
-    provider: Provider,
+pub struct ClientBuilder {
     provider_config: ProviderConfig,
 }
 
-impl ClientConfig {
-    #[must_use]
-    pub const fn provider(&self) -> Provider {
-        self.provider
-    }
-
-    #[must_use]
-    pub const fn provider_config(&self) -> &ProviderConfig {
-        &self.provider_config
-    }
-}
-
-/// 带 typestate 的客户端构建器。
-///
-/// 该构建器通过两个状态参数表达是否已设置 `provider` 和 `api_key`。只有当二者都
-/// 已就绪时，`build()` 方法才会出现在类型系统中。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientBuilder<ProviderState = ProviderUnset, ApiKeyState = ApiKeyUnset> {
-    provider: Option<Provider>,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    organization: Option<String>,
-    default_model: Option<String>,
-    timeout_secs: Option<u64>,
-    extra_headers: HashMap<String, String>,
-    _provider_state: PhantomData<ProviderState>,
-    _api_key_state: PhantomData<ApiKeyState>,
-}
-
-impl ClientBuilder<ProviderUnset, ApiKeyUnset> {
-    #[must_use]
+impl ClientBuilder {
     pub fn new() -> Self {
         Self {
-            provider: None,
-            api_key: None,
-            base_url: None,
-            organization: None,
-            default_model: None,
-            timeout_secs: None,
-            extra_headers: HashMap::new(),
-            _provider_state: PhantomData,
-            _api_key_state: PhantomData,
-        }
-    }
-}
-
-impl Default for ClientBuilder<ProviderUnset, ApiKeyUnset> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<P, A> ClientBuilder<P, A> {
-    #[must_use]
-    pub fn provider(self, provider: Provider) -> ClientBuilder<ProviderSet, A> {
-        ClientBuilder {
-            provider: Some(provider),
-            api_key: self.api_key,
-            base_url: self.base_url,
-            organization: self.organization,
-            default_model: self.default_model,
-            timeout_secs: self.timeout_secs,
-            extra_headers: self.extra_headers,
-            _provider_state: PhantomData,
-            _api_key_state: PhantomData,
+            provider_config: ProviderConfig {
+                provider: Provider::OpenAI,
+                api_key: "".to_string(),
+                base_url: None,
+                organization: None,
+                default_model: None,
+                timeout_secs: None,
+                extra_headers: HashMap::new(),
+            },
         }
     }
 
-    #[must_use]
-    pub fn api_key(self, api_key: impl Into<String>) -> ClientBuilder<P, ApiKeySet> {
-        ClientBuilder {
-            provider: self.provider,
-            api_key: Some(api_key.into()),
-            base_url: self.base_url,
-            organization: self.organization,
-            default_model: self.default_model,
-            timeout_secs: self.timeout_secs,
-            extra_headers: self.extra_headers,
-            _provider_state: PhantomData,
-            _api_key_state: PhantomData,
-        }
+    pub fn provider(mut self, provider: Provider) -> Self {
+        self.provider_config.provider = provider;
+        self
     }
 
-    #[must_use]
+    pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.provider_config.api_key = api_key.into();
+        self
+    }
+
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = Some(base_url.into());
+        self.provider_config.base_url = Some(base_url.into());
         self
     }
 
-    #[must_use]
     pub fn organization(mut self, organization: impl Into<String>) -> Self {
-        self.organization = Some(organization.into());
+        self.provider_config.organization = Some(organization.into());
         self
     }
 
-    #[must_use]
     pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.default_model = Some(model.into());
+        self.provider_config.default_model = Some(model.into());
         self
     }
 
-    #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout_secs = Some(duration_to_timeout_secs(timeout));
+        self.provider_config.timeout_secs = Some(duration_to_timeout_secs(timeout));
         self
     }
 
     /// 添加一个额外请求头。
-    #[must_use]
-    pub fn extra_header(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
-        self.extra_headers.insert(key.into(), value.into());
+    pub fn extra_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.provider_config
+            .extra_headers
+            .insert(key.into(), value.into());
         self
     }
 
-    #[must_use]
-    pub const fn configured_provider(&self) -> Option<Provider> {
-        self.provider
-    }
-
-    #[must_use]
-    pub fn configured_api_key(&self) -> Option<&str> {
-        self.api_key.as_deref()
-    }
-
-    #[must_use]
-    pub fn configured_base_url(&self) -> Option<&str> {
-        self.base_url.as_deref()
-    }
-
-    #[must_use]
-    pub fn configured_organization(&self) -> Option<&str> {
-        self.organization.as_deref()
-    }
-
-    #[must_use]
-    pub fn configured_model(&self) -> Option<&str> {
-        self.default_model.as_deref()
-    }
-
-    #[must_use]
-    pub const fn timeout_secs(&self) -> Option<u64> {
-        self.timeout_secs
-    }
-
-    #[must_use]
-    pub fn extra_headers(&self) -> Option<&HashMap<String, String>> {
-        (!self.extra_headers.is_empty()).then_some(&self.extra_headers)
-    }
-}
-
-impl ClientBuilder<ProviderSet, ApiKeySet> {
-    /// 构建客户端实例。
-    ///
-    /// 该方法仅在 `provider` 与 `api_key` 都已设置时可用，因此缺少关键配置的情况会在
-    /// 编译期被拒绝，而不是留到运行时。
     pub fn build(self) -> Result<Client, crate::LlmError> {
-        let provider = self
-            .provider
-            .expect("ProviderSet 状态必须保证 provider 已存在");
-        let api_key = self
-            .api_key
-            .expect("ApiKeySet 状态必须保证 api_key 已存在");
-        let extra_headers = (!self.extra_headers.is_empty()).then_some(self.extra_headers);
+        let provider_config = self.provider_config;
+        if provider_config.api_key.is_empty() {
+            return Err(crate::LlmError::ValidationError(
+                "尚未设置 api_key，请在构建器中调用 .api_key(...)".to_string(),
+            ));
+        }
 
-        let provider_config = match provider {
-            Provider::OpenAI => ProviderConfig::OpenAi(OpenAiConfig {
-                api_key,
-                base_url: self.base_url,
-                organization: self.organization,
-                default_model: self.default_model,
-                timeout_secs: self.timeout_secs,
-                extra_headers,
-            }),
-            Provider::Qwen => ProviderConfig::Qwen(QwenConfig {
-                api_key,
-                base_url: self.base_url,
-                organization: self.organization,
-                default_model: self.default_model,
-                timeout_secs: self.timeout_secs,
-                extra_headers,
-            }),
-            Provider::Compatible => ProviderConfig::Compatible(CompatibleConfig {
-                api_key,
-                base_url: self.base_url,
-                organization: self.organization,
-                default_model: self.default_model,
-                timeout_secs: self.timeout_secs,
-                extra_headers,
-            }),
-        };
-
-        Ok(Client::from_config(ClientConfig {
-            provider,
-            provider_config,
-        }))
+        Ok(Client::from_builder(provider_config))
     }
 }
 
@@ -455,21 +92,48 @@ fn duration_to_timeout_secs(duration: Duration) -> u64 {
 mod tests {
     use std::time::Duration;
 
-    use super::{ApiKeySet, ClientBuilder, ProviderSet, ProviderUnset};
-    use crate::Provider;
+    use super::ClientBuilder;
+    use crate::{LlmError, Provider};
 
     #[test]
-    fn typestate() {
-        let builder: ClientBuilder<ProviderUnset, _> = ClientBuilder::new();
-        let builder: ClientBuilder<ProviderSet, ApiKeySet> =
-            builder.provider(Provider::OpenAI).api_key("sk-demo");
+    fn build_persists_basic_openai_fields() {
+        let client = ClientBuilder::new()
+            .provider(Provider::OpenAI)
+            .api_key("sk-demo")
+            .model("gpt-4o")
+            .build()
+            .expect("应构建成功");
 
-        assert_eq!(builder.configured_provider(), Some(Provider::OpenAI));
-        assert_eq!(builder.configured_api_key(), Some("sk-demo"));
+        assert_eq!(client.provider(), Provider::OpenAI);
+        assert_eq!(client.provider_config.api_key, "sk-demo");
+        assert_eq!(
+            client.provider_config.default_model.as_deref(),
+            Some("gpt-4o")
+        );
     }
 
     #[test]
-    fn build_provider() {
+    fn build_uses_openai_as_default_provider() {
+        let client = ClientBuilder::new()
+            .api_key("sk-demo")
+            .build()
+            .expect("应构建成功");
+
+        assert_eq!(client.provider(), Provider::OpenAI);
+    }
+
+    #[test]
+    fn build_requires_api_key() {
+        let missing_api_key = ClientBuilder::new().provider(Provider::OpenAI).build();
+
+        assert!(matches!(
+            missing_api_key,
+            Err(LlmError::ValidationError(message)) if message.contains("api_key")
+        ));
+    }
+
+    #[test]
+    fn build_persists_qwen_headers_and_model() {
         let client = ClientBuilder::new()
             .provider(Provider::Qwen)
             .api_key("sk-qwen")
@@ -478,25 +142,24 @@ mod tests {
             .build()
             .expect("应构建成功");
 
-        assert_eq!(client.config().provider(), Provider::Qwen);
-
-        let crate::ProviderConfig::Qwen(config) = client.config().provider_config() else {
-            panic!("预期为 Qwen 配置");
-        };
-
-        assert_eq!(config.api_key(), "sk-qwen");
-        assert_eq!(config.default_model(), Some("qwen-max"));
+        assert_eq!(client.provider(), Provider::Qwen);
+        assert_eq!(client.provider_config.api_key, "sk-qwen");
         assert_eq!(
-            config
-                .extra_headers()
-                .and_then(|headers| headers.get("X-Trace-Id"))
+            client.provider_config.default_model.as_deref(),
+            Some("qwen-max")
+        );
+        assert_eq!(
+            client
+                .provider_config
+                .extra_headers
+                .get("X-Trace-Id")
                 .map(String::as_str),
             Some("demo-request")
         );
     }
 
     #[test]
-    fn builder_test() {
+    fn timeout_rounds_up_subsecond_duration() {
         let client = ClientBuilder::new()
             .provider(Provider::OpenAI)
             .api_key("sk-openai")
@@ -504,10 +167,6 @@ mod tests {
             .build()
             .expect("应构建成功");
 
-        let crate::ProviderConfig::OpenAi(config) = client.config().provider_config() else {
-            panic!("预期为 OpenAI 配置");
-        };
-
-        assert_eq!(config.timeout_secs(), Some(1));
+        assert_eq!(client.provider_config.timeout_secs, Some(1));
     }
 }

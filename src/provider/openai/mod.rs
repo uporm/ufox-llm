@@ -30,7 +30,9 @@ impl OpenAiAdapter {
         Self::default()
     }
 
-    fn lock_stream_parser(&self) -> Result<std::sync::MutexGuard<'_, OpenAiStreamParser>, LlmError> {
+    fn lock_stream_parser(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, OpenAiStreamParser>, LlmError> {
         self.stream_parser.lock().map_err(|_| {
             LlmError::StreamError("OpenAI 流式解析器状态已损坏，无法继续解析".to_string())
         })
@@ -87,7 +89,10 @@ mod tests {
 
         assert_eq!(adapter.provider(), Provider::OpenAI);
         assert_eq!(adapter.chat_path(), "/chat/completions");
-        assert_eq!(adapter.default_base_url(), Some("https://api.openai.com/v1"));
+        assert_eq!(
+            adapter.default_base_url(),
+            Some("https://api.openai.com/v1")
+        );
     }
 
     #[test]

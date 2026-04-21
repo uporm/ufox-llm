@@ -9,10 +9,9 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    Content, ContentPart, ImageFile, ImageSource, JsonType, LlmError, Message,
-    client::RequestOptions,
+    AudioFile, AudioSource, Content, ContentPart, ImageFile, ImageSource, JsonType, LlmError,
+    Message, Role, Tool, ToolChoice, VideoFile, VideoSource, client::RequestOptions,
     types::response::ReasoningEffort,
-    Role, Tool, ToolChoice,
 };
 
 /// 将公共聊天参数转换为 `OpenAI` 私有请求体。
@@ -39,12 +38,22 @@ pub fn build_chat_request(
         messages,
         tools,
         stream,
-        reasoning_effort: options.reasoning_effort(),
-        tool_choice: options.tool_choice().map(OpenAiToolChoice::from_public_choice),
-        parallel_tool_calls: options.parallel_tool_calls(),
+        temperature: options.temperature,
+        top_p: options.top_p,
+        max_tokens: options.max_tokens,
+        presence_penalty: options.presence_penalty,
+        frequency_penalty: options.frequency_penalty,
+        reasoning_effort: options.reasoning_effort,
+        tool_choice: options
+            .tool_choice
+            .as_ref()
+            .map(OpenAiToolChoice::from_public_choice),
+        parallel_tool_calls: options.parallel_tool_calls,
     };
 
-    serde_json::to_value(request).map_err(LlmError::from)
+    let mut request = serde_json::to_value(request).map_err(LlmError::from)?;
+    merge_provider_options(request.as_object_mut(), &options.provider_options);
+    Ok(request)
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +63,16 @@ struct OpenAiChatRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAiTool>>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +111,19 @@ struct OpenAiNamedToolChoice {
     name: String,
 }
 
+fn merge_provider_options(
+    target: Option<&mut Map<String, Value>>,
+    provider_options: &Map<String, Value>,
+) {
+    let Some(target) = target else {
+        return;
+    };
+
+    for (key, value) in provider_options {
+        target.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct OpenAiMessage {
     role: &'static str,
@@ -116,14 +148,18 @@ impl OpenAiMessage {
         {
             None
         } else {
-            Some(OpenAiMessageContent::from_public_content(message.content())?)
+            Some(OpenAiMessageContent::from_public_content(
+                message.content(),
+            )?)
         };
 
         Ok(Self {
             role,
             content,
             name: message.name().map(ToOwned::to_owned),
-            tool_calls: message.tool_calls().map(OpenAiOutboundToolCall::from_public_tool_calls),
+            tool_calls: message
+                .tool_calls()
+                .map(OpenAiOutboundToolCall::from_public_tool_calls),
             tool_call_id: message.tool_call_id().map(ToOwned::to_owned),
         })
     }
@@ -152,12 +188,10 @@ impl OpenAiMessageContent {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum OpenAiContentPart {
-    Text {
-        text: String,
-    },
-    ImageUrl {
-        image_url: OpenAiImageUrl,
-    },
+    Text { text: String },
+    ImageUrl { image_url: OpenAiImageUrl },
+    InputAudio { input_audio: OpenAiInputAudio },
+    VideoUrl { video_url: OpenAiVideoUrl },
 }
 
 impl OpenAiContentPart {
@@ -166,6 +200,12 @@ impl OpenAiContentPart {
             ContentPart::Text { text } => Ok(Self::Text { text: text.clone() }),
             ContentPart::Image { source } => Ok(Self::ImageUrl {
                 image_url: OpenAiImageUrl::from_image_source(source)?,
+            }),
+            ContentPart::Audio { source } => Ok(Self::InputAudio {
+                input_audio: OpenAiInputAudio::from_audio_source(source)?,
+            }),
+            ContentPart::Video { source } => Ok(Self::VideoUrl {
+                video_url: OpenAiVideoUrl::from_video_source(source)?,
             }),
         }
     }
@@ -182,6 +222,40 @@ impl OpenAiImageUrl {
             ImageSource::Url { url } => Ok(Self { url: url.clone() }),
             ImageSource::File(file) => Ok(Self {
                 url: image_file_to_data_url(file)?,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiInputAudio {
+    data: String,
+    format: String,
+}
+
+impl OpenAiInputAudio {
+    fn from_audio_source(source: &AudioSource) -> Result<Self, LlmError> {
+        match source {
+            AudioSource::Url { .. } => Err(LlmError::UnsupportedFeature {
+                provider: "openai".to_string(),
+                feature: "audio_url 输入（请改用本地音频文件）".to_string(),
+            }),
+            AudioSource::File(file) => audio_file_to_openai_input(file),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiVideoUrl {
+    url: String,
+}
+
+impl OpenAiVideoUrl {
+    fn from_video_source(source: &VideoSource) -> Result<Self, LlmError> {
+        match source {
+            VideoSource::Url { url } => Ok(Self { url: url.clone() }),
+            VideoSource::File(file) => Ok(Self {
+                url: video_file_to_data_url(file)?,
             }),
         }
     }
@@ -226,7 +300,8 @@ struct OpenAiOutboundToolFunction {
 
 impl OpenAiTool {
     fn from_public_tools(tools: &[Tool]) -> Vec<Self> {
-        tools.iter()
+        tools
+            .iter()
             .map(|tool| Self {
                 kind: "function",
                 function: OpenAiFunctionTool::from_public_tool(tool),
@@ -271,10 +346,7 @@ fn build_parameters_schema(tool: &Tool) -> Value {
     let mut schema = Map::new();
     schema.insert("type".to_string(), Value::String("object".to_string()));
     schema.insert("properties".to_string(), Value::Object(properties));
-    schema.insert(
-        "additionalProperties".to_string(),
-        Value::Bool(false),
-    );
+    schema.insert("additionalProperties".to_string(), Value::Bool(false));
 
     if !required.is_empty() {
         schema.insert("required".to_string(), json!(required));
@@ -331,11 +403,72 @@ fn image_file_to_data_url(file: &ImageFile) -> Result<String, LlmError> {
     Ok(format!("data:{mime_type};base64,{encoded}"))
 }
 
+fn video_file_to_data_url(file: &VideoFile) -> Result<String, LlmError> {
+    let bytes = fs::read(file.path()).map_err(|error| {
+        LlmError::StreamError(format!(
+            "读取本地视频文件失败：路径={}，错误={error}",
+            file.path().display()
+        ))
+    })?;
+    let mime_type = file.mime_type().unwrap_or("application/octet-stream");
+    let encoded = STANDARD.encode(bytes);
+
+    Ok(format!("data:{mime_type};base64,{encoded}"))
+}
+
+fn audio_file_to_openai_input(file: &AudioFile) -> Result<OpenAiInputAudio, LlmError> {
+    let bytes = fs::read(file.path()).map_err(|error| {
+        LlmError::StreamError(format!(
+            "读取本地音频文件失败：路径={}，错误={error}",
+            file.path().display()
+        ))
+    })?;
+    let format = infer_audio_format(file).ok_or_else(|| LlmError::UnsupportedFeature {
+        provider: "openai".to_string(),
+        feature: format!(
+            "不支持的音频格式：路径={}，mime={:?}",
+            file.path().display(),
+            file.mime_type()
+        ),
+    })?;
+
+    Ok(OpenAiInputAudio {
+        data: STANDARD.encode(bytes),
+        format: format.to_string(),
+    })
+}
+
+fn infer_audio_format(file: &AudioFile) -> Option<&'static str> {
+    file.mime_type()
+        .and_then(audio_format_from_mime)
+        .or_else(|| {
+            file.path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .and_then(audio_format_from_extension)
+        })
+}
+
+fn audio_format_from_mime(mime_type: &str) -> Option<&'static str> {
+    match mime_type {
+        "audio/wav" | "audio/x-wav" => Some("wav"),
+        "audio/mpeg" | "audio/mp3" => Some("mp3"),
+        _ => None,
+    }
+}
+
+fn audio_format_from_extension(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "wav" => Some("wav"),
+        "mp3" => Some("mp3"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
-        env,
-        fs,
+        env, fs,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -353,7 +486,7 @@ mod tests {
             false,
             &RequestOptions::default(),
         )
-            .expect("请求体应构建成功");
+        .expect("请求体应构建成功");
 
         assert_eq!(request["model"], "gpt-4o");
         assert_eq!(request["stream"], false);
@@ -383,6 +516,51 @@ mod tests {
             request["messages"][0]["content"][1]["image_url"]["url"],
             "https://example.com/photo.jpg"
         );
+    }
+
+    #[test]
+    fn openai_audio_video_content_parts() {
+        let audio_path = temp_audio_path();
+        let video_path = temp_video_path();
+        fs::write(&audio_path, [0x49, 0x44, 0x33]).expect("应能写入测试音频");
+        fs::write(&video_path, [0x00, 0x00, 0x00, 0x18]).expect("应能写入测试视频");
+
+        let message = Message::builder(Role::User)
+            .text("请总结音视频内容")
+            .audio_file(&audio_path)
+            .video_file(&video_path)
+            .build();
+        let request = build_chat_request(
+            "gpt-4o",
+            &[message],
+            None,
+            false,
+            &RequestOptions::default(),
+        )
+        .expect("请求体应构建成功");
+
+        assert_eq!(request["messages"][0]["content"][1]["type"], "input_audio");
+        assert_eq!(
+            request["messages"][0]["content"][1]["input_audio"]["format"],
+            "mp3"
+        );
+        assert!(
+            request["messages"][0]["content"][1]["input_audio"]["data"]
+                .as_str()
+                .expect("音频数据应为字符串")
+                .len()
+                > 0
+        );
+        assert_eq!(request["messages"][0]["content"][2]["type"], "video_url");
+        assert!(
+            request["messages"][0]["content"][2]["video_url"]["url"]
+                .as_str()
+                .expect("视频 URL 应为字符串")
+                .starts_with("data:video/mp4;base64,")
+        );
+
+        fs::remove_file(audio_path).expect("应能清理测试音频");
+        fs::remove_file(video_path).expect("应能清理测试视频");
     }
 
     #[test]
@@ -501,13 +679,94 @@ mod tests {
             &[Message::user("分析这段代码")],
             None,
             false,
-            &RequestOptions::new()
-                .with_thinking(true)
-                .with_reasoning_effort(crate::types::response::ReasoningEffort::High),
+            &RequestOptions {
+                thinking: true,
+                reasoning_effort: Some(crate::types::response::ReasoningEffort::High),
+                ..RequestOptions::default()
+            },
         )
         .expect("请求体应构建成功");
 
         assert_eq!(request["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn openai_sampling_parameters() {
+        let request = build_chat_request(
+            "gpt-4o",
+            &[Message::user("讲个故事")],
+            None,
+            false,
+            &RequestOptions {
+                temperature: Some(0.6),
+                top_p: Some(0.95),
+                max_tokens: Some(512),
+                presence_penalty: Some(0.4),
+                frequency_penalty: Some(0.2),
+                ..RequestOptions::default()
+            },
+        )
+        .expect("请求体应构建成功");
+
+        assert!(
+            (request["temperature"]
+                .as_f64()
+                .expect("temperature 应为数字")
+                - 0.6)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (request["top_p"].as_f64().expect("top_p 应为数字") - 0.95).abs() < 1e-6
+        );
+        assert_eq!(request["max_tokens"], 512);
+        assert!(
+            (request["presence_penalty"]
+                .as_f64()
+                .expect("presence_penalty 应为数字")
+                - 0.4)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (request["frequency_penalty"]
+                .as_f64()
+                .expect("frequency_penalty 应为数字")
+                - 0.2)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn openai_provider_options() {
+        let request = build_chat_request(
+            "gpt-4o",
+            &[Message::user("讲个故事")],
+            None,
+            false,
+            &RequestOptions {
+                temperature: Some(0.6),
+                provider_options: serde_json::Map::from_iter([
+                    ("max_completion_tokens".to_string(), json!(1024)),
+                    ("temperature".to_string(), json!(0.2)),
+                    ("metadata".to_string(), json!({ "tier": "pro" })),
+                ]),
+                ..RequestOptions::default()
+            },
+        )
+        .expect("请求体应构建成功");
+
+        assert_eq!(request["max_completion_tokens"], 1024);
+        assert_eq!(request["metadata"]["tier"], "pro");
+        assert!(
+            (request["temperature"]
+                .as_f64()
+                .expect("temperature 应为数字")
+                - 0.6)
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -520,9 +779,11 @@ mod tests {
             &[Message::user("杭州天气")],
             Some(&[tool]),
             false,
-            &RequestOptions::new()
-                .with_tool_choice(crate::ToolChoice::function("get_weather"))
-                .with_parallel_tool_calls(true),
+            &RequestOptions {
+                tool_choice: Some(crate::ToolChoice::function("get_weather")),
+                parallel_tool_calls: Some(true),
+                ..RequestOptions::default()
+            },
         )
         .expect("请求体应构建成功");
 
@@ -538,6 +799,28 @@ mod tests {
             .as_nanos();
         env::temp_dir().join(format!(
             "ufox-llm-openai-request-{timestamp}-{}.png",
+            std::process::id()
+        ))
+    }
+
+    fn temp_audio_path() -> std::path::PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("系统时间应大于 UNIX_EPOCH")
+            .as_nanos();
+        env::temp_dir().join(format!(
+            "ufox-llm-openai-request-{timestamp}-{}.mp3",
+            std::process::id()
+        ))
+    }
+
+    fn temp_video_path() -> std::path::PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("系统时间应大于 UNIX_EPOCH")
+            .as_nanos();
+        env::temp_dir().join(format!(
+            "ufox-llm-openai-request-{timestamp}-{}.mp4",
             std::process::id()
         ))
     }

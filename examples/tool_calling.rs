@@ -3,7 +3,7 @@
 //! 该示例演示如何：
 //! 1. 从环境变量读取 Provider、API Key、模型与可选基础地址；
 //! 2. 声明一个函数型工具；
-//! 3. 调用 `chat_with_tools()` 发起带工具定义的请求；
+//! 3. 构造带工具定义的 `ChatRequest` 并发起请求；
 //! 4. 解析模型返回的 `tool_calls`，并在本地分发执行；
 //! 5. 将工具结果回填给模型，继续获取最终答复。
 //!
@@ -20,7 +20,9 @@ use std::env;
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
-use ufox_llm::{Client, JsonType, Message, Provider, Tool, ToolCall, ToolChoice, ToolResult};
+use ufox_llm::{
+    ChatRequest, Client, JsonType, Message, Provider, Tool, ToolCall, ToolChoice, ToolResult,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,7 +42,7 @@ async fn main() -> Result<()> {
     }
 
     let client = builder.build().context("构建客户端失败")?;
-    let tool = Tool::function("get_weather")
+    let tools = [Tool::function("get_weather")
         .description("获取城市实时天气")
         .param("city", JsonType::String, "城市名称", true)
         .param(
@@ -49,18 +51,18 @@ async fn main() -> Result<()> {
             "温度单位",
             false,
         )
-        .build();
+        .build()];
     let mut messages = vec![
         Message::system("你是一位会优先调用工具获取准确信息的助手。"),
         Message::user("请查询杭州当前天气，并告诉我温度。"),
     ];
 
-    let response = client
-        .chat_with_tools(&messages, &[tool])
+    let request = ChatRequest::new(&messages)
+        .tools(&tools)
         .tool_choice(ToolChoice::Auto)
         .parallel_tool_calls(true)
-        .await
-        .context("工具调用请求失败")?;
+        .build();
+    let response = client.chat(&request).await.context("工具调用请求失败")?;
 
     if let Some(calls) = response.tool_calls() {
         let calls = calls.to_vec();
@@ -77,7 +79,11 @@ async fn main() -> Result<()> {
             messages.push(Message::tool_result(call.id(), result.content()));
         }
 
-        let final_response = client.chat(&messages).await.context("工具结果回填后继续请求失败")?;
+        let request = ChatRequest::new(&messages).build();
+        let final_response = client
+            .chat(&request)
+            .await
+            .context("工具结果回填后继续请求失败")?;
         println!("\n最终回复：\n{}", final_response.content());
     } else {
         println!("模型未触发工具调用，直接回复：\n{}", response.content());
@@ -138,9 +144,7 @@ fn read_provider() -> Result<Provider> {
         "openai" => Ok(Provider::OpenAI),
         "qwen" => Ok(Provider::Qwen),
         "compatible" => Ok(Provider::Compatible),
-        other => bail!(
-            "不支持的 Provider：{other}，可选值为 openai、qwen、compatible"
-        ),
+        other => bail!("不支持的 Provider：{other}，可选值为 openai、qwen、compatible"),
     }
 }
 

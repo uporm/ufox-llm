@@ -15,6 +15,9 @@ pub mod message;
 pub mod response;
 pub mod tool;
 
-pub use message::{Content, ContentPart, ImageFile, ImageSource, Message, MessageBuilder, Role};
+pub use message::{
+    AudioFile, AudioSource, Content, ContentPart, ImageFile, ImageSource, Message, MessageBuilder,
+    Role, VideoFile, VideoSource,
+};
 pub use response::{ChatResponse, DeltaType, FinishReason, ReasoningEffort, StreamChunk, Usage};
-pub use tool::{JsonType, Tool, ToolBuilder, ToolCall, ToolChoice, ToolKind, ToolParameter, ToolResult};
+pub use tool::{JsonType, Tool, ToolBuilder, ToolCall, ToolChoice, ToolParameter, ToolResult};

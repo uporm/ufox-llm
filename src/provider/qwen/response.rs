@@ -34,7 +34,11 @@ pub fn parse_chat_response(body: &[u8]) -> Result<ChatResponse, LlmError> {
 
     let mut chat_response = ChatResponse::new(choice.message.content.into_text());
 
-    if let Some(reasoning_content) = choice.message.reasoning_content.filter(|text| !text.is_empty()) {
+    if let Some(reasoning_content) = choice
+        .message
+        .reasoning_content
+        .filter(|text| !text.is_empty())
+    {
         chat_response = chat_response.with_thinking_content(reasoning_content);
     }
 
@@ -46,7 +50,11 @@ pub fn parse_chat_response(body: &[u8]) -> Result<ChatResponse, LlmError> {
         chat_response = chat_response.with_finish_reason(finish_reason);
     }
 
-    if let Some(thinking_tokens) = response.usage.as_ref().and_then(QwenUsage::thinking_tokens) {
+    if let Some(thinking_tokens) = response
+        .usage
+        .as_ref()
+        .and_then(|usage| usage.reasoning.or(usage.thinking))
+    {
         chat_response = chat_response.with_thinking_tokens(thinking_tokens);
     }
 
@@ -63,7 +71,13 @@ pub fn parse_chat_response(body: &[u8]) -> Result<ChatResponse, LlmError> {
 fn convert_tool_calls(tool_calls: Vec<QwenToolCall>) -> Vec<ToolCall> {
     tool_calls
         .into_iter()
-        .map(|tool_call| ToolCall::new(tool_call.id, tool_call.function.name, tool_call.function.arguments))
+        .map(|tool_call| {
+            ToolCall::new(
+                tool_call.id,
+                tool_call.function.name,
+                tool_call.function.arguments,
+            )
+        })
         .collect()
 }
 
@@ -118,15 +132,9 @@ impl QwenAssistantContent {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum QwenAssistantContentPart {
-    Text {
-        text: String,
-    },
-    Refusal {
-        refusal: String,
-    },
-    Image {
-        image: String,
-    },
+    Text { text: String },
+    Refusal { refusal: String },
+    Image { image: String },
     Other(Value),
 }
 
@@ -172,12 +180,6 @@ struct QwenUsage {
     #[serde(default)]
     #[serde(rename = "thinking_tokens")]
     thinking: Option<u32>,
-}
-
-impl QwenUsage {
-    fn thinking_tokens(&self) -> Option<u32> {
-        self.reasoning.or(self.thinking)
-    }
 }
 
 #[derive(Debug, Deserialize)]

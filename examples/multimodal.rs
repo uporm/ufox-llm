@@ -4,7 +4,7 @@
 //! 1. 从环境变量读取 Provider、API Key、模型与可选基础地址；
 //! 2. 构建一个 [`ufox_llm::Client`]；
 //! 3. 使用 [`ufox_llm::MessageBuilder`] 构造包含文本与图片的多模态消息；
-//! 4. 调用非流式 `chat()` 并打印模型回复。
+//! 4. 构造 `ChatRequest`，调用非流式 `chat()` 并打印模型回复。
 //!
 //! 运行前请至少设置：
 //! - `UFOX_LLM_PROVIDER`：`openai` / `qwen` / `compatible`
@@ -22,7 +22,7 @@ use std::env;
 
 use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
-use ufox_llm::{Client, Message, MessageBuilder, Provider};
+use ufox_llm::{ChatRequest, Client, Message, MessageBuilder, Provider};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -52,7 +52,8 @@ async fn main() -> Result<()> {
         multimodal_message,
     ];
 
-    let response = client.chat(&messages).await.context("多模态请求失败")?;
+    let request = ChatRequest::new(&messages).build();
+    let response = client.chat(&request).await.context("多模态请求失败")?;
 
     println!("模型回复：\n{}", response.content());
 
@@ -91,9 +92,7 @@ fn read_provider() -> Result<Provider> {
         "openai" => Ok(Provider::OpenAI),
         "qwen" => Ok(Provider::Qwen),
         "compatible" => Ok(Provider::Compatible),
-        other => bail!(
-            "不支持的 Provider：{other}，可选值为 openai、qwen、compatible"
-        ),
+        other => bail!("不支持的 Provider：{other}，可选值为 openai、qwen、compatible"),
     }
 }
 
@@ -162,7 +161,9 @@ fn provider_name(provider: Provider) -> &'static str {
 
 fn looks_like_vision_model(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
-    ["vl", "vision", "omni", "gpt-4o", "gpt-4.1"].iter().any(|key| model.contains(key))
+    ["vl", "vision", "omni", "gpt-4o", "gpt-4.1"]
+        .iter()
+        .any(|key| model.contains(key))
 }
 
 fn default_model(provider: Provider) -> &'static str {

@@ -129,6 +129,37 @@ mod tests {
     }
 
     #[test]
+    fn adapter_keeps_provider_options_in_openai_compatible_body() {
+        let adapter = CompatibleAdapter::new();
+        let request = adapter
+            .build_chat_request(
+                "deepseek-chat",
+                &[Message::user("你好")],
+                None,
+                false,
+                &RequestOptions {
+                    provider_options: serde_json::Map::from_iter([
+                        ("seed".to_string(), json!(42)),
+                        ("temperature".to_string(), json!(0.1)),
+                    ]),
+                    temperature: Some(0.6),
+                    ..RequestOptions::default()
+                },
+            )
+            .expect("请求体应构建成功");
+
+        assert_eq!(request["seed"], 42);
+        assert!(
+            (request["temperature"]
+                .as_f64()
+                .expect("temperature 应为数字")
+                - 0.6)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
     fn adapter_openai() {
         let adapter = CompatibleAdapter::new();
         let error = adapter

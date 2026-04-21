@@ -111,12 +111,14 @@ enum DeltaKind {
 
 /// 用量统计信息。
 ///
-/// 该结构体统一表达一次请求的输入、输出与总 `token` 用量，便于日志记录、
-/// 计费统计或速率控制。
+/// 该结构体统一表达一次请求的输入、输出与总 `token` 用量，便于日志记录、计费统计或速率控制。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    /// 输入（提示词）消耗的 token 数。
     prompt: u32,
+    /// 输出（补全）消耗的 token 数。
     completion: u32,
+    /// 总 token 数（`prompt + completion`）。
     total: u32,
 }
 
@@ -168,35 +170,30 @@ impl ChatResponse {
     }
 
     /// 为响应附加思考过程文本。
-
     pub fn with_thinking_content(mut self, thinking_content: impl Into<String>) -> Self {
         self.thinking_content = Some(thinking_content.into());
         self
     }
 
     /// 为响应附加思考阶段消耗的 `token` 数。
-
     pub const fn with_thinking_tokens(mut self, thinking_tokens: u32) -> Self {
         self.thinking_tokens = Some(thinking_tokens);
         self
     }
 
     /// 为响应附加工具调用列表。
-
     pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
         self.tool_calls = Some(tool_calls);
         self
     }
 
     /// 为响应附加结束原因。
-
     pub fn with_finish_reason(mut self, finish_reason: FinishReason) -> Self {
         self.finish_reason = Some(finish_reason);
         self
     }
 
     /// 为响应附加用量信息。
-
     pub fn with_usage(mut self, usage: Usage) -> Self {
         self.usage = Some(usage);
         self
@@ -271,21 +268,18 @@ impl StreamChunk {
     ///
     /// 这里保存的是当前片段可对外消费的完整工具调用集合，而不是尚未闭合的部分参数碎片。
     /// 这样可以让公开 `API` 保持稳定简单，具体的片段级聚合逻辑放在 `Provider` 层内部完成。
-
     pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
         self.tool_calls = Some(tool_calls);
         self
     }
 
     /// 为流式片段附加结束原因。
-
     pub fn with_finish_reason(mut self, finish_reason: FinishReason) -> Self {
         self.finish_reason = Some(finish_reason);
         self
     }
 
     /// 为流式片段附加用量信息。
-
     pub fn with_usage(mut self, usage: Usage) -> Self {
         self.usage = Some(usage);
         self

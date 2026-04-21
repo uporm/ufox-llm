@@ -36,7 +36,15 @@ pub fn build_chat_request(
         parameters,
     };
 
-    serde_json::to_value(request).map_err(LlmError::from)
+    let mut request = serde_json::to_value(request).map_err(LlmError::from)?;
+    merge_provider_options(
+        request
+            .as_object_mut()
+            .and_then(|body| body.get_mut("parameters"))
+            .and_then(Value::as_object_mut),
+        &options.provider_options,
+    );
+    Ok(request)
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +64,16 @@ struct QwenParameters {
     result_format: &'static str,
     incremental_output: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     enable_thinking: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking_budget: Option<u32>,
@@ -72,10 +90,18 @@ impl QwenParameters {
         Self {
             result_format: "message",
             incremental_output: stream,
-            enable_thinking: options.thinking().then_some(true),
-            thinking_budget: options.thinking_budget(),
-            tool_choice: options.tool_choice().map(QwenToolChoice::from_public_choice),
-            parallel_tool_calls: options.parallel_tool_calls(),
+            temperature: options.temperature,
+            top_p: options.top_p,
+            max_tokens: options.max_tokens,
+            presence_penalty: options.presence_penalty,
+            frequency_penalty: options.frequency_penalty,
+            enable_thinking: options.thinking.then_some(true),
+            thinking_budget: options.thinking_budget,
+            tool_choice: options
+                .tool_choice
+                .as_ref()
+                .map(QwenToolChoice::from_public_choice),
+            parallel_tool_calls: options.parallel_tool_calls,
             tools: tools
                 .filter(|items| !items.is_empty())
                 .map(QwenTool::from_public_tools),
@@ -105,6 +131,19 @@ impl QwenToolChoice {
                 function: QwenNamedToolChoice { name: name.clone() },
             },
         }
+    }
+}
+
+fn merge_provider_options(
+    target: Option<&mut Map<String, Value>>,
+    provider_options: &Map<String, Value>,
+) {
+    let Some(target) = target else {
+        return;
+    };
+
+    for (key, value) in provider_options {
+        target.entry(key.clone()).or_insert_with(|| value.clone());
     }
 }
 
@@ -142,7 +181,9 @@ impl QwenMessage {
                 Some(QwenMessageContent::from_public_content(message.content())?)
             },
             name: message.name().map(ToOwned::to_owned),
-            tool_calls: message.tool_calls().map(QwenOutboundToolCall::from_public_tool_calls),
+            tool_calls: message
+                .tool_calls()
+                .map(QwenOutboundToolCall::from_public_tool_calls),
             tool_call_id: message.tool_call_id().map(ToOwned::to_owned),
         })
     }
@@ -171,12 +212,8 @@ impl QwenMessageContent {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum QwenContentPart {
-    Text {
-        text: String,
-    },
-    Image {
-        image: String,
-    },
+    Text { text: String },
+    Image { image: String },
 }
 
 impl QwenContentPart {
@@ -185,6 +222,14 @@ impl QwenContentPart {
             ContentPart::Text { text } => Ok(Self::Text { text: text.clone() }),
             ContentPart::Image { source } => Ok(Self::Image {
                 image: image_source_to_qwen_value(source)?,
+            }),
+            ContentPart::Audio { .. } => Err(LlmError::UnsupportedFeature {
+                provider: "qwen".to_string(),
+                feature: "音频输入".to_string(),
+            }),
+            ContentPart::Video { .. } => Err(LlmError::UnsupportedFeature {
+                provider: "qwen".to_string(),
+                feature: "视频输入".to_string(),
             }),
         }
     }
@@ -229,7 +274,8 @@ struct QwenOutboundToolFunction {
 
 impl QwenTool {
     fn from_public_tools(tools: &[Tool]) -> Vec<Self> {
-        tools.iter()
+        tools
+            .iter()
             .map(|tool| Self {
                 kind: "function",
                 function: QwenFunctionTool::from_public_tool(tool),
@@ -340,8 +386,7 @@ fn image_file_to_data_url(file: &ImageFile) -> Result<String, LlmError> {
 #[cfg(test)]
 mod tests {
     use std::{
-        env,
-        fs,
+        env, fs,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -384,7 +429,10 @@ mod tests {
         )
         .expect("请求体应构建成功");
 
-        assert_eq!(request["input"]["messages"][0]["content"][0]["text"], "描述这张图片");
+        assert_eq!(
+            request["input"]["messages"][0]["content"][0]["text"],
+            "描述这张图片"
+        );
         assert_eq!(
             request["input"]["messages"][0]["content"][1]["image"],
             "https://example.com/photo.jpg"
@@ -415,7 +463,10 @@ mod tests {
 
         assert_eq!(request["parameters"]["incremental_output"], true);
         assert_eq!(request["parameters"]["tools"][0]["type"], "function");
-        assert_eq!(request["parameters"]["tools"][0]["function"]["name"], "get_weather");
+        assert_eq!(
+            request["parameters"]["tools"][0]["function"]["name"],
+            "get_weather"
+        );
         assert_eq!(
             request["parameters"]["tools"][0]["function"]["parameters"],
             json!({
@@ -476,8 +527,14 @@ mod tests {
         .expect("请求体应构建成功");
 
         assert_eq!(request["input"]["messages"][0]["role"], "assistant");
-        assert_eq!(request["input"]["messages"][0]["content"], serde_json::Value::Null);
-        assert_eq!(request["input"]["messages"][0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(
+            request["input"]["messages"][0]["content"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            request["input"]["messages"][0]["tool_calls"][0]["id"],
+            "call_1"
+        );
     }
 
     #[test]
@@ -503,9 +560,11 @@ mod tests {
             &[Message::user("分析这段代码")],
             None,
             true,
-            &RequestOptions::new()
-                .with_thinking(true)
-                .with_thinking_budget(8192),
+            &RequestOptions {
+                thinking: true,
+                thinking_budget: Some(8192),
+                ..RequestOptions::default()
+            },
         )
         .expect("请求体应构建成功");
 
@@ -523,9 +582,11 @@ mod tests {
             &[Message::user("杭州天气")],
             Some(&[tool]),
             false,
-            &RequestOptions::new()
-                .with_tool_choice(crate::ToolChoice::function("get_weather"))
-                .with_parallel_tool_calls(true),
+            &RequestOptions {
+                tool_choice: Some(crate::ToolChoice::function("get_weather")),
+                parallel_tool_calls: Some(true),
+                ..RequestOptions::default()
+            },
         )
         .expect("请求体应构建成功");
 
@@ -534,6 +595,90 @@ mod tests {
         assert_eq!(
             request["parameters"]["tool_choice"]["function"]["name"],
             "get_weather"
+        );
+    }
+
+    #[test]
+    fn qwen_sampling_parameters() {
+        let request = build_chat_request(
+            "qwen-max",
+            &[Message::user("讲个故事")],
+            None,
+            false,
+            &RequestOptions {
+                temperature: Some(0.7),
+                top_p: Some(0.85),
+                max_tokens: Some(768),
+                presence_penalty: Some(0.3),
+                frequency_penalty: Some(0.15),
+                ..RequestOptions::default()
+            },
+        )
+        .expect("请求体应构建成功");
+
+        assert!(
+            (request["parameters"]["temperature"]
+                .as_f64()
+                .expect("temperature 应为数字")
+                - 0.7)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (request["parameters"]["top_p"]
+                .as_f64()
+                .expect("top_p 应为数字")
+                - 0.85)
+                .abs()
+                < 1e-6
+        );
+        assert_eq!(request["parameters"]["max_tokens"], 768);
+        assert!(
+            (request["parameters"]["presence_penalty"]
+                .as_f64()
+                .expect("presence_penalty 应为数字")
+                - 0.3)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (request["parameters"]["frequency_penalty"]
+                .as_f64()
+                .expect("frequency_penalty 应为数字")
+                - 0.15)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn qwen_provider_options() {
+        let request = build_chat_request(
+            "qwen-max",
+            &[Message::user("讲个故事")],
+            None,
+            false,
+            &RequestOptions {
+                top_p: Some(0.85),
+                provider_options: serde_json::Map::from_iter([
+                    ("seed".to_string(), json!(7)),
+                    ("top_p".to_string(), json!(0.2)),
+                    ("repetition_penalty".to_string(), json!(1.1)),
+                ]),
+                ..RequestOptions::default()
+            },
+        )
+        .expect("请求体应构建成功");
+
+        assert_eq!(request["parameters"]["seed"], 7);
+        assert_eq!(request["parameters"]["repetition_penalty"], 1.1);
+        assert!(
+            (request["parameters"]["top_p"]
+                .as_f64()
+                .expect("top_p 应为数字")
+                - 0.85)
+                .abs()
+                < 1e-6
         );
     }
 

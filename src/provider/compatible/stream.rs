@@ -38,10 +38,7 @@ impl CompatibleStreamParser {
     /// # Errors
     /// - [`LlmError::ParseError`]：当事件数据不是合法 `JSON` 时触发
     /// - [`LlmError::StreamError`]：当事件缺少必要字段或工具调用碎片不完整时触发
-    pub fn parse_event_chunks(
-        &mut self,
-        event_data: &str,
-    ) -> Result<Vec<StreamChunk>, LlmError> {
+    pub fn parse_event_chunks(&mut self, event_data: &str) -> Result<Vec<StreamChunk>, LlmError> {
         self.inner
             .parse_event_chunks(event_data)
             .map_err(rewrite_provider_in_stream_error)

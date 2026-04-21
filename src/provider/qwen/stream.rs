@@ -37,10 +37,7 @@ impl QwenStreamParser {
     /// # Errors
     /// - [`LlmError::ParseError`]：当事件数据不是合法 `JSON` 时触发
     /// - [`LlmError::StreamError`]：当事件缺少必要字段或工具调用碎片不完整时触发
-    pub fn parse_event_chunks(
-        &mut self,
-        event_data: &str,
-    ) -> Result<Vec<StreamChunk>, LlmError> {
+    pub fn parse_event_chunks(&mut self, event_data: &str) -> Result<Vec<StreamChunk>, LlmError> {
         if is_done_event(event_data) {
             self.reset();
             return Ok(Vec::new());
@@ -60,12 +57,10 @@ impl QwenStreamParser {
                 .unwrap_or_default());
         }
 
-        let choice = response
-            .output
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| LlmError::StreamError("Qwen 流式事件缺少 output.choices".to_string()))?;
+        let choice =
+            response.output.choices.into_iter().next().ok_or_else(|| {
+                LlmError::StreamError("Qwen 流式事件缺少 output.choices".to_string())
+            })?;
 
         let reasoning_delta = choice.message.reasoning_content.unwrap_or_default();
         let delta_text = choice.message.content.into_text();
@@ -225,15 +220,9 @@ impl QwenDeltaContent {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum QwenDeltaContentPart {
-    Text {
-        text: String,
-    },
-    Refusal {
-        refusal: String,
-    },
-    Image {
-        image: String,
-    },
+    Text { text: String },
+    Refusal { refusal: String },
+    Image { image: String },
     Other(Value),
 }
 
@@ -485,9 +474,7 @@ mod tests {
         .to_string();
         let mut parser = QwenStreamParser::new();
 
-        let chunks = parser
-            .parse_event_chunks(&body)
-            .expect("事件应解析成功");
+        let chunks = parser.parse_event_chunks(&body).expect("事件应解析成功");
 
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].is_thinking());

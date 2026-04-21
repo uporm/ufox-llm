@@ -40,7 +40,11 @@ pub(crate) fn parse_chat_response_with_provider(
 
     let mut chat_response = ChatResponse::new(choice.message.content.into_text());
 
-    if let Some(reasoning_content) = choice.message.reasoning_content.filter(|text| !text.is_empty()) {
+    if let Some(reasoning_content) = choice
+        .message
+        .reasoning_content
+        .filter(|text| !text.is_empty())
+    {
         chat_response = chat_response.with_thinking_content(reasoning_content);
     }
 
@@ -52,11 +56,12 @@ pub(crate) fn parse_chat_response_with_provider(
         chat_response = chat_response.with_finish_reason(finish_reason);
     }
 
-    if let Some(reasoning_tokens) = response
-        .usage
-        .as_ref()
-        .and_then(OpenAiUsage::reasoning_tokens)
-    {
+    if let Some(reasoning_tokens) = response.usage.as_ref().and_then(|usage| {
+        usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|details| details.reasoning_tokens)
+    }) {
         chat_response = chat_response.with_thinking_tokens(reasoning_tokens);
     }
 
@@ -73,7 +78,13 @@ pub(crate) fn parse_chat_response_with_provider(
 fn convert_tool_calls(tool_calls: Vec<OpenAiToolCall>) -> Vec<ToolCall> {
     tool_calls
         .into_iter()
-        .map(|tool_call| ToolCall::new(tool_call.id, tool_call.function.name, tool_call.function.arguments))
+        .map(|tool_call| {
+            ToolCall::new(
+                tool_call.id,
+                tool_call.function.name,
+                tool_call.function.arguments,
+            )
+        })
         .collect()
 }
 
@@ -162,14 +173,6 @@ struct OpenAiUsage {
     completion_tokens: u32,
     #[serde(default)]
     completion_tokens_details: Option<OpenAiCompletionTokenDetails>,
-}
-
-impl OpenAiUsage {
-    fn reasoning_tokens(&self) -> Option<u32> {
-        self.completion_tokens_details
-            .as_ref()
-            .and_then(|details| details.reasoning_tokens)
-    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -17,7 +17,7 @@ use std::env;
 
 use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
-use ufox_llm::{Client, Message, Provider};
+use ufox_llm::{ChatRequest, Client, Message, Provider};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -42,7 +42,8 @@ async fn main() -> Result<()> {
         Message::user("请用一句话介绍 Rust 适合做什么。"),
     ];
 
-    let response = client.chat(&messages).await.context("调用聊天接口失败")?;
+    let request = ChatRequest::new(&messages).build();
+    let response = client.chat(&request).await.context("调用聊天接口失败")?;
 
     println!("模型回复：\n{}", response.content());
 
@@ -79,9 +80,7 @@ fn read_provider() -> Result<Provider> {
         "openai" => Ok(Provider::OpenAI),
         "qwen" => Ok(Provider::Qwen),
         "compatible" => Ok(Provider::Compatible),
-        other => bail!(
-            "不支持的 Provider：{other}，可选值为 openai、qwen、compatible"
-        ),
+        other => bail!("不支持的 Provider：{other}，可选值为 openai、qwen、compatible"),
     }
 }
 

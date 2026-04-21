@@ -18,7 +18,7 @@ use std::env;
 
 use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
-use ufox_llm::{Client, JsonType, Message, Provider, Tool, ToolChoice};
+use ufox_llm::{ChatRequest, Client, JsonType, Message, Provider, Tool, ToolChoice};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -47,10 +47,13 @@ async fn main() -> Result<()> {
         Message::user("请分别查询北京和上海的天气。"),
     ];
 
-    let response = client
-        .chat_with_tools(&messages, &tools)
+    let request = ChatRequest::new(&messages)
+        .tools(&tools)
         .tool_choice(ToolChoice::Auto)
         .parallel_tool_calls(true)
+        .build();
+    let response = client
+        .chat(&request)
         .await
         .context("发起工具调用请求失败")?;
 
@@ -88,9 +91,7 @@ fn read_provider() -> Result<Provider> {
         "openai" => Ok(Provider::OpenAI),
         "qwen" => Ok(Provider::Qwen),
         "compatible" => Ok(Provider::Compatible),
-        other => bail!(
-            "不支持的 Provider：{other}，可选值为 openai、qwen、compatible"
-        ),
+        other => bail!("不支持的 Provider：{other}，可选值为 openai、qwen、compatible"),
     }
 }
 

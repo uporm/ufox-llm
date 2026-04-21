@@ -43,7 +43,7 @@ impl Provider {
     pub const fn default_base_url(self) -> Option<&'static str> {
         match self {
             Self::OpenAI => Some("https://api.openai.com/v1"),
-            Self::Qwen => Some("https://dashscope.aliyuncs.com"),
+            Self::Qwen => Some("https://dashscope-intl.aliyuncs.com/api/v1"),
             Self::Compatible => None,
         }
     }
@@ -122,7 +122,7 @@ mod tests {
         );
         assert_eq!(
             Provider::Qwen.default_base_url(),
-            Some("https://dashscope.aliyuncs.com")
+            Some("https://dashscope-intl.aliyuncs.com/api/v1")
         );
         assert!(Provider::Compatible.requires_explicit_base_url());
     }

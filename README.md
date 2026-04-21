@@ -47,7 +47,7 @@ tokio = { version = "1", features = ["full"] }
 ### 基础聊天
 
 ```rust
-use ufox_llm::{Client, Message, Provider};
+use ufox_llm::{ChatRequest, Client, Message, Provider};
 
 #[tokio::main]
 async fn main() -> Result<(), ufox_llm::LlmError> {
@@ -62,7 +62,8 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         Message::user("请用一句话介绍 Rust。"),
     ];
 
-    let response = client.chat(&messages).await?;
+    let request = ChatRequest::new(&messages).build();
+    let response = client.chat(&request).await?;
     println!("{}", response.content());
 
     Ok(())
@@ -73,7 +74,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 
 ```rust
 use futures_util::StreamExt;
-use ufox_llm::{Client, Message, Provider};
+use ufox_llm::{ChatRequest, Client, Message, Provider};
 
 #[tokio::main]
 async fn main() -> Result<(), ufox_llm::LlmError> {
@@ -84,7 +85,8 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         .build()?;
 
     let messages = vec![Message::user("请分三行介绍 Rust 的优势。")];
-    let mut stream = client.chat_stream(&messages).await?;
+    let request = ChatRequest::new(&messages).build();
+    let mut stream = client.chat_stream(&request).await?;
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
@@ -102,7 +104,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 
 ```rust
 use futures_util::StreamExt;
-use ufox_llm::{Client, DeltaType, Message, Provider, ReasoningEffort};
+use ufox_llm::{ChatRequest, Client, DeltaType, Message, Provider, ReasoningEffort};
 
 #[tokio::main]
 async fn main() -> Result<(), ufox_llm::LlmError> {
@@ -114,19 +116,20 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 
     let messages = vec![Message::user("请分析这道题并给出结论。")];
 
-    let response = client
-        .chat(&messages)
+    let request = ChatRequest::new(&messages)
         .thinking(true)
         .thinking_budget(8_000)
         .reasoning_effort(ReasoningEffort::High)
-        .await?;
+        .build();
+    let response = client.chat(&request).await?;
 
     if let Some(thinking) = response.thinking_content() {
         println!("=== 思考过程 ===\n{thinking}");
     }
     println!("=== 最终回复 ===\n{}", response.content());
 
-    let mut stream = client.chat_stream(&messages).thinking(true).await?;
+    let stream_request = ChatRequest::new(&messages).thinking(true).build();
+    let mut stream = client.chat_stream(&stream_request).await?;
     while let Some(chunk) = stream.next().await {
         match chunk?.delta_type() {
             DeltaType::Thinking(text) => print!("{text}"),
@@ -150,7 +153,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 SDK 不管理历史，调用方自己维护 `messages`：
 
 ```rust
-use ufox_llm::{Client, Message, Provider};
+use ufox_llm::{ChatRequest, Client, Message, Provider};
 
 #[tokio::main]
 async fn main() -> Result<(), ufox_llm::LlmError> {
@@ -165,11 +168,13 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         Message::user("请简要说明 Rust 所有权系统解决了什么问题。"),
     ];
 
-    let first = client.chat(&messages).await?;
+    let first_request = ChatRequest::new(&messages).build();
+    let first = client.chat(&first_request).await?;
     messages.push(Message::assistant(first.content()));
 
     messages.push(Message::user("请再补充两个它对并发编程的帮助点。"));
-    let second = client.chat(&messages).await?;
+    let second_request = ChatRequest::new(&messages).build();
+    let second = client.chat(&second_request).await?;
     messages.push(Message::assistant(second.content()));
 
     Ok(())
@@ -181,7 +186,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 当前版本使用 `MessageBuilder` 构造多模态消息：
 
 ```rust
-use ufox_llm::{Client, Message, MessageBuilder, Provider};
+use ufox_llm::{ChatRequest, Client, Message, MessageBuilder, Provider};
 
 #[tokio::main]
 async fn main() -> Result<(), ufox_llm::LlmError> {
@@ -201,7 +206,8 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         message,
     ];
 
-    let response = client.chat(&messages).await?;
+    let request = ChatRequest::new(&messages).build();
+    let response = client.chat(&request).await?;
     println!("{}", response.content());
 
     Ok(())
@@ -227,7 +233,7 @@ fn main() {
 
 ```rust
 use serde_json::json;
-use ufox_llm::{Client, JsonType, Message, Provider, Tool, ToolChoice, ToolResult};
+use ufox_llm::{ChatRequest, Client, JsonType, Message, Provider, Tool, ToolChoice, ToolResult};
 
 #[tokio::main]
 async fn main() -> Result<(), ufox_llm::LlmError> {
@@ -237,7 +243,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         .model("gpt-4o")
         .build()?;
 
-    let tool = Tool::function("get_weather")
+    let tools = [Tool::function("get_weather")
         .description("获取城市实时天气")
         .param("city", JsonType::String, "城市名称", true)
         .param(
@@ -246,14 +252,15 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
             "温度单位",
             false,
         )
-        .build();
+        .build()];
 
     let mut messages = vec![Message::user("请查询杭州天气。")];
-    let response = client
-        .chat_with_tools(&messages, &[tool])
+    let request = ChatRequest::new(&messages)
+        .tools(&tools)
         .tool_choice(ToolChoice::function("get_weather"))
         .parallel_tool_calls(true)
-        .await?;
+        .build();
+    let response = client.chat(&request).await?;
 
     if let Some(calls) = response.tool_calls() {
         let calls = calls.to_vec();
@@ -276,7 +283,8 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
             messages.push(Message::tool_result(call.id(), result.content()));
         }
 
-        let final_response = client.chat(&messages).await?;
+        let request = ChatRequest::new(&messages).build();
+        let final_response = client.chat(&request).await?;
         println!("{}", final_response.content());
     }
 
@@ -289,7 +297,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 - 当前版本已经支持工具声明、工具调用解析、工具结果回填和继续追问模型
 - `tool_choice(...)` 支持 `Auto`、`None`、`Required` 以及指定函数名
 - `parallel_tool_calls(true)` 可让支持并行工具调用的 Provider 一次返回多个工具调用
-- 若 Provider 支持工具调用，推荐按“`assistant_with_tool_calls` -> `tool_result` -> `chat`”的顺序继续对话
+- 若 Provider 支持工具调用，推荐按“`assistant_with_tool_calls` -> `tool_result` -> `ChatRequest::new(...)` -> `chat`”的顺序继续对话
 
 ## Provider 配置
 

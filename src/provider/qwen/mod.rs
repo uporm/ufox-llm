@@ -43,7 +43,7 @@ impl ProviderAdapter for QwenAdapter {
     }
 
     fn chat_path(&self) -> &'static str {
-        "/services/aigc/text-generation/generation"
+        "/chat/completions"
     }
 
     fn build_chat_request(
@@ -86,10 +86,10 @@ mod tests {
         let adapter = QwenAdapter::new();
 
         assert_eq!(adapter.provider(), Provider::Qwen);
-        assert_eq!(adapter.chat_path(), "/services/aigc/text-generation/generation");
+        assert_eq!(adapter.chat_path(), "/chat/completions");
         assert_eq!(
             adapter.default_base_url(),
-            Some("https://dashscope.aliyuncs.com")
+            Some("https://dashscope-intl.aliyuncs.com/api/v1")
         );
     }
 

@@ -2,6 +2,8 @@
 //!
 //! 定义工具声明、参数类型、工具调用请求与工具执行结果。
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -41,6 +43,34 @@ impl JsonType {
 
     pub const fn is_enum(&self) -> bool {
         matches!(self, Self::Enum(_))
+    }
+}
+
+/// 工具定义。
+///
+/// 当前 `SDK` 仅支持函数调用，因此工具定义保持扁平结构。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tool {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters: Vec<ToolParameter>,
+}
+
+impl Tool {
+    pub fn function(name: impl Into<String>) -> ToolBuilder {
+        ToolBuilder::new(name)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    pub fn parameters(&self) -> &[ToolParameter] {
+        &self.parameters
     }
 }
 
@@ -87,101 +117,6 @@ impl ToolParameter {
     }
 }
 
-/// 工具种类。
-///
-/// 当前仅支持函数型工具。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
-    /// 函数型工具。
-    Function,
-}
-
-impl ToolKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Function => "function",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct FunctionTool {
-    name: String,
-    description: Option<String>,
-    parameters: Vec<ToolParameter>,
-}
-
-/// 工具定义。
-///
-/// 当前 `SDK` 仅支持函数型工具定义，但该结构体保留了稳定的包装层，便于未来扩展更多
-/// 工具种类而不破坏对外 `API`。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Tool {
-    kind: ToolKind,
-    function: FunctionTool,
-}
-
-impl Tool {
-    pub fn function(name: impl Into<String>) -> ToolBuilder {
-        ToolBuilder::new(name)
-    }
-
-    pub fn name(&self) -> &str {
-        &self.function.name
-    }
-
-    pub fn description(&self) -> Option<&str> {
-        self.function.description.as_deref()
-    }
-
-    pub fn parameters(&self) -> &[ToolParameter] {
-        &self.function.parameters
-    }
-
-    pub const fn kind(&self) -> ToolKind {
-        self.kind
-    }
-}
-
-/// 工具调用策略。
-///
-/// 该枚举统一表达不同 Provider 对“是否调用工具、是否强制调用指定工具”的配置方式。
-/// 对于不支持某个策略的 Provider，适配层会按能力范围忽略不兼容字段。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolChoice {
-    /// 由模型自动决定是否调用工具。
-    Auto,
-    /// 禁止模型调用工具。
-    None,
-    /// 强制模型至少调用一个工具。
-    Required,
-    /// 强制模型调用指定名称的工具。
-    Function { name: String },
-}
-
-impl ToolChoice {
-    pub fn function(name: impl Into<String>) -> Self {
-        Self::Function { name: name.into() }
-    }
-
-    pub const fn as_str(&self) -> Option<&'static str> {
-        match self {
-            Self::Auto => Some("auto"),
-            Self::None => Some("none"),
-            Self::Required => Some("required"),
-            Self::Function { .. } => None,
-        }
-    }
-
-    pub fn function_name(&self) -> Option<&str> {
-        match self {
-            Self::Function { name } => Some(name),
-            Self::Auto | Self::None | Self::Required => None,
-        }
-    }
-}
-
 /// 工具构建器。
 ///
 /// 该构建器用于以声明式方式构建函数型工具定义。
@@ -217,26 +152,58 @@ impl ToolBuilder {
         description: impl Into<String>,
         required: bool,
     ) -> Self {
-        self.parameters.push(ToolParameter {
-            name: name.into(),
-            json_type,
-            description: description.into(),
-            required,
-        });
+        self.parameters
+            .push(ToolParameter::new(name, json_type, description, required));
         self
     }
 
     /// 构建工具定义。
-
     pub fn build(self) -> Tool {
         Tool {
-            kind: ToolKind::Function,
-            function: FunctionTool {
-                name: self.name,
-                description: self.description,
-                parameters: self.parameters,
-            },
+            name: self.name,
+            description: self.description,
+            parameters: self.parameters,
         }
+    }
+
+    /// 构建并校验工具定义。
+    ///
+    /// # Errors
+    /// - [`LlmError::ValidationError`]：当工具名为空、参数名重复，或枚举参数无可选值时触发
+    pub fn build_checked(self) -> Result<Tool, LlmError> {
+        self.validate()?;
+        Ok(self.build())
+    }
+
+    fn validate(&self) -> Result<(), LlmError> {
+        if self.name.trim().is_empty() {
+            return Err(LlmError::ValidationError("工具名称不能为空".to_string()));
+        }
+
+        let mut parameter_names = HashSet::new();
+        for parameter in &self.parameters {
+            if parameter.name().trim().is_empty() {
+                return Err(LlmError::ValidationError("参数名称不能为空".to_string()));
+            }
+
+            if !parameter_names.insert(parameter.name()) {
+                return Err(LlmError::ValidationError(format!(
+                    "参数名称重复：{}",
+                    parameter.name()
+                )));
+            }
+
+            if let JsonType::Enum(candidates) = parameter.json_type() {
+                if candidates.is_empty() {
+                    return Err(LlmError::ValidationError(format!(
+                        "参数 {} 的枚举候选值不能为空",
+                        parameter.name()
+                    )));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -320,14 +287,69 @@ impl ToolResult {
     }
 }
 
+/// 工具调用策略。
+///
+/// 该枚举统一表达不同 Provider 对“是否调用工具、是否强制调用指定工具”的配置方式。
+/// 对于不支持某个策略的 Provider，适配层会按能力范围忽略不兼容字段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolChoice {
+    /// 由模型自动决定是否调用工具。
+    Auto,
+    /// 禁止模型调用工具。
+    None,
+    /// 强制模型至少调用一个工具。
+    Required,
+    /// 强制模型调用指定名称的工具。
+    Function { name: String },
+}
+
+impl ToolChoice {
+    pub fn function(name: impl Into<String>) -> Self {
+        Self::Function { name: name.into() }
+    }
+
+    pub const fn as_str(&self) -> Option<&'static str> {
+        match self {
+            Self::Auto => Some("auto"),
+            Self::None => Some("none"),
+            Self::Required => Some("required"),
+            Self::Function { .. } => None,
+        }
+    }
+
+    pub fn function_name(&self) -> Option<&str> {
+        match self {
+            Self::Function { name } => Some(name),
+            Self::Auto | Self::None | Self::Required => None,
+        }
+    }
+
+    /// 转为 Provider 适配层可直接消费的 `JSON` 结构。
+    ///
+    /// 普通策略映射为字符串，指定函数策略映射为标准对象结构。
+    pub fn to_json_value(&self) -> Value {
+        match self {
+            Self::Auto => Value::String("auto".to_string()),
+            Self::None => Value::String("none".to_string()),
+            Self::Required => Value::String("required".to_string()),
+            Self::Function { name } => serde_json::json!({
+                "type": "function",
+                "function": { "name": name },
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{JsonType, Tool, ToolCall, ToolChoice, ToolKind, ToolResult};
+    use crate::LlmError;
+
+    use super::{JsonType, Tool, ToolCall, ToolChoice, ToolResult};
 
     #[test]
-    fn tool_test() {
+    fn builds_function_tool_with_parameters() {
         let tool = Tool::function("get_weather")
             .description("获取城市实时天气")
             .param("city", JsonType::String, "城市名称", true)
@@ -339,13 +361,13 @@ mod tests {
             )
             .build();
 
-        assert_eq!(tool.kind(), ToolKind::Function);
+        assert_eq!(tool.name(), "get_weather");
         assert_eq!(tool.parameters()[0].name(), "city");
         assert_eq!(tool.parameters()[1].name(), "unit");
     }
 
     #[test]
-    fn json_2() {
+    fn parses_tool_call_arguments_json() {
         let call = ToolCall::new("call_1", "get_weather", r#"{"city":"杭州"}"#);
         let value = call.arguments_json().expect("参数应为合法 JSON");
 
@@ -353,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn json_3() {
+    fn serializes_tool_result_json_content() {
         let result = ToolResult::json("call_1", json!({ "temp": 26, "unit": "celsius" }));
 
         assert_eq!(result.tool_call_id(), "call_1");
@@ -361,12 +383,59 @@ mod tests {
     }
 
     #[test]
-    fn tool_test_2() {
+    fn exposes_tool_choice_helpers() {
         let choice = ToolChoice::function("get_weather");
 
         assert_eq!(choice.function_name(), Some("get_weather"));
         assert_eq!(ToolChoice::Auto.as_str(), Some("auto"));
         assert_eq!(ToolChoice::None.as_str(), Some("none"));
         assert_eq!(ToolChoice::Required.as_str(), Some("required"));
+        assert_eq!(
+            choice.to_json_value(),
+            json!({
+                "type": "function",
+                "function": { "name": "get_weather" }
+            })
+        );
+    }
+
+    #[test]
+    fn returns_parse_error_for_invalid_tool_call_arguments() {
+        let call = ToolCall::new("call_1", "get_weather", "{invalid-json");
+        let error = call
+            .arguments_json()
+            .expect_err("非法 JSON 应返回 ParseError");
+        assert!(matches!(error, LlmError::ParseError(_)));
+    }
+
+    #[test]
+    fn build_checked_rejects_empty_tool_name() {
+        let error = Tool::function("   ")
+            .param("city", JsonType::String, "城市名称", true)
+            .build_checked()
+            .expect_err("空工具名应校验失败");
+
+        assert!(matches!(error, LlmError::ValidationError(_)));
+    }
+
+    #[test]
+    fn build_checked_rejects_duplicate_parameter_names() {
+        let error = Tool::function("get_weather")
+            .param("city", JsonType::String, "城市名称", true)
+            .param("city", JsonType::String, "城市别名", false)
+            .build_checked()
+            .expect_err("重复参数名应校验失败");
+
+        assert!(matches!(error, LlmError::ValidationError(_)));
+    }
+
+    #[test]
+    fn build_checked_rejects_empty_enum_candidates() {
+        let error = Tool::function("get_weather")
+            .param("unit", JsonType::Enum(vec![]), "温度单位", false)
+            .build_checked()
+            .expect_err("空枚举候选应校验失败");
+
+        assert!(matches!(error, LlmError::ValidationError(_)));
     }
 }

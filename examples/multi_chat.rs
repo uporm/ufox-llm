@@ -20,7 +20,7 @@ use std::env;
 
 use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
-use ufox_llm::{Client, Message, Provider};
+use ufox_llm::{ChatRequest, Client, Message, Provider};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -46,13 +46,21 @@ async fn main() -> Result<()> {
         Message::user("请简要说明 Rust 所有权系统解决了什么问题。"),
     ];
 
-    let first = client.chat(&messages).await.context("第一轮对话失败")?;
+    let first_request = ChatRequest::new(&messages).build();
+    let first = client
+        .chat(&first_request)
+        .await
+        .context("第一轮对话失败")?;
     println!("第一轮回复：\n{}\n", first.content());
     messages.push(Message::assistant(first.content()));
 
     messages.push(Message::user("请再补充两个它对并发编程的帮助点。"));
 
-    let second = client.chat(&messages).await.context("第二轮对话失败")?;
+    let second_request = ChatRequest::new(&messages).build();
+    let second = client
+        .chat(&second_request)
+        .await
+        .context("第二轮对话失败")?;
     println!("第二轮回复：\n{}\n", second.content());
     messages.push(Message::assistant(second.content()));
 
@@ -78,9 +86,7 @@ fn read_provider() -> Result<Provider> {
         "openai" => Ok(Provider::OpenAI),
         "qwen" => Ok(Provider::Qwen),
         "compatible" => Ok(Provider::Compatible),
-        other => bail!(
-            "不支持的 Provider：{other}，可选值为 openai、qwen、compatible"
-        ),
+        other => bail!("不支持的 Provider：{other}，可选值为 openai、qwen、compatible"),
     }
 }
 

@@ -52,6 +52,10 @@ pub enum LlmError {
     #[error("处理流式响应失败：{0}")]
     StreamError(String),
 
+    /// 本地构建请求或输入校验失败。
+    #[error("参数校验失败：{0}")]
+    ValidationError(String),
+
     /// 当前 Provider 不支持调用方请求的能力。
     #[error("Provider {provider} 不支持功能：{feature}")]
     UnsupportedFeature {
