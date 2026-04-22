@@ -45,18 +45,18 @@ async fn main() -> Result<()> {
     let request = ChatRequest::new(&messages).build();
     let response = client.chat(&request).await.context("调用聊天接口失败")?;
 
-    println!("模型回复：\n{}", response.content());
+    println!("模型回复：\n{}", response.content);
 
-    if let Some(reason) = response.finish_reason() {
+    if let Some(reason) = response.finish_reason.as_ref() {
         println!("\n结束原因：{}", reason.as_str());
     }
 
-    if let Some(usage) = response.usage() {
+    if let Some(usage) = response.usage.as_ref() {
         println!(
             "Token 用量：prompt={}, completion={}, total={}",
-            usage.prompt_tokens(),
-            usage.completion_tokens(),
-            usage.total_tokens()
+            usage.prompt,
+            usage.completion,
+            usage.total
         );
     }
 

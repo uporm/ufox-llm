@@ -60,18 +60,6 @@ impl Tool {
     pub fn function(name: impl Into<String>) -> ToolBuilder {
         ToolBuilder::new(name)
     }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
-
-    pub fn parameters(&self) -> &[ToolParameter] {
-        &self.parameters
-    }
 }
 
 /// 工具参数定义。
@@ -79,10 +67,10 @@ impl Tool {
 /// 该类型描述函数工具中的单个入参，包括名称、类型、说明和是否必填。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolParameter {
-    name: String,
-    json_type: JsonType,
-    description: String,
-    required: bool,
+    pub name: String,
+    pub json_type: JsonType,
+    pub description: String,
+    pub required: bool,
 }
 
 impl ToolParameter {
@@ -98,22 +86,6 @@ impl ToolParameter {
             description: description.into(),
             required,
         }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub const fn json_type(&self) -> &JsonType {
-        &self.json_type
-    }
-
-    pub fn description(&self) -> &str {
-        &self.description
-    }
-
-    pub const fn required(&self) -> bool {
-        self.required
     }
 }
 
@@ -134,10 +106,6 @@ impl ToolBuilder {
             description: None,
             parameters: Vec::new(),
         }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
     }
 
     pub fn description(mut self, description: impl Into<String>) -> Self {
@@ -182,22 +150,22 @@ impl ToolBuilder {
 
         let mut parameter_names = HashSet::new();
         for parameter in &self.parameters {
-            if parameter.name().trim().is_empty() {
+            if parameter.name.trim().is_empty() {
                 return Err(LlmError::ValidationError("参数名称不能为空".to_string()));
             }
 
-            if !parameter_names.insert(parameter.name()) {
+            if !parameter_names.insert(parameter.name.as_str()) {
                 return Err(LlmError::ValidationError(format!(
                     "参数名称重复：{}",
-                    parameter.name()
+                    parameter.name
                 )));
             }
 
-            if let JsonType::Enum(candidates) = parameter.json_type() {
+            if let JsonType::Enum(candidates) = &parameter.json_type {
                 if candidates.is_empty() {
                     return Err(LlmError::ValidationError(format!(
                         "参数 {} 的枚举候选值不能为空",
-                        parameter.name()
+                        parameter.name
                     )));
                 }
             }
@@ -213,9 +181,9 @@ impl ToolBuilder {
 /// [`ToolCall::arguments_json`] 获取解析后的 `JSON` 值。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
-    id: String,
-    name: String,
-    arguments: String,
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
 }
 
 impl ToolCall {
@@ -229,18 +197,6 @@ impl ToolCall {
             name: name.into(),
             arguments: arguments.into(),
         }
-    }
-
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn arguments(&self) -> &str {
-        &self.arguments
     }
 
     /// 将原始参数解析为 `JSON` 值。
@@ -257,8 +213,8 @@ impl ToolCall {
 /// 这样可以兼容纯文本结果和调用方自行序列化后的 `JSON` 结果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
-    tool_call_id: String,
-    content: String,
+    pub tool_call_id: String,
+    pub content: String,
 }
 
 impl ToolResult {
@@ -276,14 +232,6 @@ impl ToolResult {
             tool_call_id: tool_call_id.into(),
             content: content.to_string(),
         }
-    }
-
-    pub fn tool_call_id(&self) -> &str {
-        &self.tool_call_id
-    }
-
-    pub fn content(&self) -> &str {
-        &self.content
     }
 }
 
@@ -361,9 +309,9 @@ mod tests {
             )
             .build();
 
-        assert_eq!(tool.name(), "get_weather");
-        assert_eq!(tool.parameters()[0].name(), "city");
-        assert_eq!(tool.parameters()[1].name(), "unit");
+        assert_eq!(tool.name, "get_weather");
+        assert_eq!(tool.parameters[0].name, "city");
+        assert_eq!(tool.parameters[1].name, "unit");
     }
 
     #[test]
@@ -378,8 +326,8 @@ mod tests {
     fn serializes_tool_result_json_content() {
         let result = ToolResult::json("call_1", json!({ "temp": 26, "unit": "celsius" }));
 
-        assert_eq!(result.tool_call_id(), "call_1");
-        assert_eq!(result.content(), r#"{"temp":26,"unit":"celsius"}"#);
+        assert_eq!(result.tool_call_id, "call_1");
+        assert_eq!(result.content, r#"{"temp":26,"unit":"celsius"}"#);
     }
 
     #[test]

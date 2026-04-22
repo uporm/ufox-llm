@@ -77,7 +77,7 @@ impl OpenAiStreamParser {
             chunks.push(StreamChunk::new(delta_text));
         }
 
-        let mut has_effective_data = chunks.iter().any(|chunk| !chunk.delta().is_empty());
+        let mut has_effective_data = chunks.iter().any(|chunk| !chunk.delta.is_empty());
         if chunks.is_empty() {
             chunks.push(StreamChunk::new(""));
         }
@@ -303,7 +303,7 @@ mod tests {
             .expect("事件应解析成功")
             .expect("应产出增量");
 
-        assert_eq!(chunk.delta(), "你");
+        assert_eq!(chunk.delta, "你");
         assert!(!chunk.is_terminal());
     }
 
@@ -361,9 +361,9 @@ mod tests {
             .expect("第二段应解析成功")
             .expect("应输出完整工具调用");
 
-        assert_eq!(chunk.finish_reason(), Some(&FinishReason::ToolCalls));
+        assert_eq!(chunk.finish_reason.as_ref(), Some(&FinishReason::ToolCalls));
         assert_eq!(
-            chunk.tool_calls().expect("应包含工具调用")[0].arguments(),
+            chunk.tool_calls.as_ref().expect("应包含工具调用")[0].arguments,
             "{\"city\":\"杭州\"}"
         );
     }
@@ -386,7 +386,7 @@ mod tests {
             .expect("事件应解析成功")
             .expect("应产出 usage 尾片段");
 
-        assert_eq!(chunk.usage().expect("应包含 usage").total_tokens(), 20);
+        assert_eq!(chunk.usage.as_ref().expect("应包含 usage").total, 20);
     }
 
     #[test]
@@ -410,7 +410,7 @@ mod tests {
             .expect("应产出思考增量");
 
         assert!(chunk.is_thinking());
-        assert_eq!(chunk.delta(), "先分析");
+        assert_eq!(chunk.delta, "先分析");
     }
 
     #[test]
@@ -433,8 +433,8 @@ mod tests {
 
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].is_thinking());
-        assert_eq!(chunks[0].delta(), "先分析");
-        assert_eq!(chunks[1].delta(), "最终答案");
+        assert_eq!(chunks[0].delta, "先分析");
+        assert_eq!(chunks[1].delta, "最终答案");
         assert!(!chunks[1].is_thinking());
     }
 
@@ -460,6 +460,6 @@ mod tests {
             .expect("应返回最后片段");
 
         assert!(!chunk.is_thinking());
-        assert_eq!(chunk.delta(), "最终答案");
+        assert_eq!(chunk.delta, "最终答案");
     }
 }

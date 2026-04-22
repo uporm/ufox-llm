@@ -55,20 +55,20 @@ async fn main() -> Result<()> {
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("读取流式分片失败")?;
 
-        if !chunk.delta().is_empty() {
-            print!("{}", chunk.delta());
+        if !chunk.delta.is_empty() {
+            print!("{}", chunk.delta);
         }
 
-        if let Some(reason) = chunk.finish_reason() {
+        if let Some(reason) = chunk.finish_reason.as_ref() {
             println!("\n\n结束原因：{}", reason.as_str());
         }
 
-        if let Some(usage) = chunk.usage() {
+        if let Some(usage) = chunk.usage.as_ref() {
             println!(
                 "Token 用量：prompt={}, completion={}, total={}",
-                usage.prompt_tokens(),
-                usage.completion_tokens(),
-                usage.total_tokens()
+                usage.prompt,
+                usage.completion,
+                usage.total
             );
         }
     }

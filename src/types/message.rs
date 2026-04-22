@@ -210,8 +210,8 @@ impl VideoSource {
 /// 该结构体仅保存路径与 `MIME` 类型元数据，不在构造阶段执行 `I/O`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageFile {
-    path: PathBuf,
-    mime_type: Option<String>,
+    pub path: PathBuf,
+    pub mime_type: Option<String>,
 }
 
 impl ImageFile {
@@ -221,14 +221,6 @@ impl ImageFile {
 
         Self { path, mime_type }
     }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn mime_type(&self) -> Option<&str> {
-        self.mime_type.as_deref()
-    }
 }
 
 /// 本地音频文件描述。
@@ -236,8 +228,8 @@ impl ImageFile {
 /// 该结构体仅保存路径与 `MIME` 类型元数据，不在构造阶段执行 `I/O`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioFile {
-    path: PathBuf,
-    mime_type: Option<String>,
+    pub path: PathBuf,
+    pub mime_type: Option<String>,
 }
 
 impl AudioFile {
@@ -247,14 +239,6 @@ impl AudioFile {
 
         Self { path, mime_type }
     }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn mime_type(&self) -> Option<&str> {
-        self.mime_type.as_deref()
-    }
 }
 
 /// 本地视频文件描述。
@@ -262,8 +246,8 @@ impl AudioFile {
 /// 该结构体仅保存路径与 `MIME` 类型元数据，不在构造阶段执行 `I/O`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoFile {
-    path: PathBuf,
-    mime_type: Option<String>,
+    pub path: PathBuf,
+    pub mime_type: Option<String>,
 }
 
 impl VideoFile {
@@ -272,14 +256,6 @@ impl VideoFile {
         let mime_type = guess_mime_type(&path);
 
         Self { path, mime_type }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn mime_type(&self) -> Option<&str> {
-        self.mime_type.as_deref()
     }
 }
 
@@ -291,11 +267,11 @@ impl VideoFile {
 /// 2. 工具执行结果回填时关联的 `tool_call_id`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
-    role: Role,
-    content: Content,
-    name: Option<String>,
-    tool_calls: Option<Vec<ToolCall>>,
-    tool_call_id: Option<String>,
+    pub role: Role,
+    pub content: Content,
+    pub name: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
@@ -348,26 +324,6 @@ impl Message {
         MessageBuilder::new(role)
     }
 
-    pub const fn role(&self) -> Role {
-        self.role
-    }
-
-    pub const fn content(&self) -> &Content {
-        &self.content
-    }
-
-    pub fn name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
-
-    pub fn tool_calls(&self) -> Option<&[ToolCall]> {
-        self.tool_calls.as_deref()
-    }
-
-    pub fn tool_call_id(&self) -> Option<&str> {
-        self.tool_call_id.as_deref()
-    }
-
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
@@ -405,10 +361,6 @@ impl MessageBuilder {
 
     pub fn assistant() -> Self {
         Self::new(Role::Assistant)
-    }
-
-    pub const fn role(&self) -> Role {
-        self.role
     }
 
     pub fn text(mut self, text: impl Into<String>) -> Self {
@@ -489,8 +441,8 @@ mod tests {
     fn message_test() {
         let message = MessageBuilder::user().text("你好").build();
 
-        assert_eq!(message.content().as_text(), Some("你好"));
-        assert!(!message.content().is_multimodal());
+        assert_eq!(message.content.as_text(), Some("你好"));
+        assert!(!message.content.is_multimodal());
     }
 
     #[test]
@@ -503,9 +455,9 @@ mod tests {
             .text("再输出结论")
             .build();
 
-        assert!(message.content().is_multimodal());
+        assert!(message.content.is_multimodal());
 
-        let Content::Parts(parts) = message.content() else {
+        let Content::Parts(parts) = &message.content else {
             panic!("预期为多模态片段内容");
         };
 
@@ -524,7 +476,7 @@ mod tests {
             panic!("预期为文件来源");
         };
 
-        assert_eq!(file.mime_type(), Some("image/png"));
+        assert_eq!(file.mime_type.as_deref(), Some("image/png"));
     }
 
     #[test]
@@ -535,7 +487,7 @@ mod tests {
             panic!("预期为文件来源");
         };
 
-        assert_eq!(file.mime_type(), Some("audio/mpeg"));
+        assert_eq!(file.mime_type.as_deref(), Some("audio/mpeg"));
     }
 
     #[test]
@@ -546,7 +498,7 @@ mod tests {
             panic!("预期为文件来源");
         };
 
-        assert_eq!(file.mime_type(), Some("video/mp4"));
+        assert_eq!(file.mime_type.as_deref(), Some("video/mp4"));
     }
 
     #[test]
@@ -554,20 +506,20 @@ mod tests {
         let calls = vec![ToolCall::new("call_1", "get_weather", r#"{"city":"杭州"}"#)];
         let message = Message::assistant_with_tool_calls(&calls);
 
-        assert_eq!(message.role(), Role::Assistant);
+        assert_eq!(message.role, Role::Assistant);
         assert_eq!(
-            message.tool_calls().expect("应包含工具调用")[0].id(),
+            message.tool_calls.as_ref().expect("应包含工具调用")[0].id,
             "call_1"
         );
-        assert_eq!(message.content().as_text(), Some(""));
+        assert_eq!(message.content.as_text(), Some(""));
     }
 
     #[test]
     fn tool_call_id_2() {
         let message = Message::tool_result("call_1", r#"{"temp":26}"#);
 
-        assert_eq!(message.role(), Role::Tool);
-        assert_eq!(message.tool_call_id(), Some("call_1"));
-        assert_eq!(message.content().as_text(), Some(r#"{"temp":26}"#));
+        assert_eq!(message.role, Role::Tool);
+        assert_eq!(message.tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(message.content.as_text(), Some(r#"{"temp":26}"#));
     }
 }

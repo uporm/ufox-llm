@@ -11,11 +11,11 @@ use crate::{
     client::RequestOptions,
 };
 
-pub mod request;
-pub mod response;
-pub mod stream;
+mod request;
+mod response;
+mod stream;
 
-pub use stream::{QwenStreamParser, is_done_event};
+pub use stream::QwenStreamParser;
 
 /// `Qwen` 协议适配器。
 #[derive(Debug, Default)]
@@ -127,6 +127,6 @@ mod tests {
             .expect("流式事件应解析成功")
             .expect("应产出流式增量");
 
-        assert_eq!(chunk.delta(), "你");
+        assert_eq!(chunk.delta, "你");
     }
 }

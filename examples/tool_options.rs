@@ -57,18 +57,18 @@ async fn main() -> Result<()> {
         .await
         .context("发起工具调用请求失败")?;
 
-    if let Some(calls) = response.tool_calls() {
+    if let Some(calls) = response.tool_calls.as_ref() {
         println!("模型返回了 {} 个工具调用：", calls.len());
         for call in calls {
             println!(
                 "- id={} name={} arguments={}",
-                call.id(),
-                call.name(),
-                call.arguments()
+                call.id,
+                call.name,
+                call.arguments
             );
         }
     } else {
-        println!("模型未调用工具，直接回复：\n{}", response.content());
+        println!("模型未调用工具，直接回复：\n{}", response.content);
     }
 
     Ok(())

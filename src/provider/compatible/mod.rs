@@ -11,9 +11,9 @@ use crate::{
     client::RequestOptions,
 };
 
-pub mod stream;
+mod stream;
 
-pub use stream::{CompatibleStreamParser, is_done_event};
+pub use stream::CompatibleStreamParser;
 
 /// 兼容 `OpenAI` 协议的适配器。
 #[derive(Debug, Default)]
@@ -125,7 +125,7 @@ mod tests {
             .expect("流式事件应解析成功")
             .expect("应产出流式增量");
 
-        assert_eq!(chunk.delta(), "你");
+        assert_eq!(chunk.delta, "你");
     }
 
     #[test]

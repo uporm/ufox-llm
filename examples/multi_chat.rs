@@ -51,8 +51,8 @@ async fn main() -> Result<()> {
         .chat(&first_request)
         .await
         .context("第一轮对话失败")?;
-    println!("第一轮回复：\n{}\n", first.content());
-    messages.push(Message::assistant(first.content()));
+    println!("第一轮回复：\n{}\n", first.content);
+    messages.push(Message::assistant(&first.content));
 
     messages.push(Message::user("请再补充两个它对并发编程的帮助点。"));
 
@@ -61,8 +61,8 @@ async fn main() -> Result<()> {
         .chat(&second_request)
         .await
         .context("第二轮对话失败")?;
-    println!("第二轮回复：\n{}\n", second.content());
-    messages.push(Message::assistant(second.content()));
+    println!("第二轮回复：\n{}\n", second.content);
+    messages.push(Message::assistant(&second.content));
 
     println!("当前消息历史条数：{}", messages.len());
 

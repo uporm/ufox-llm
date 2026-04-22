@@ -64,19 +64,19 @@ async fn main() -> Result<()> {
         .build();
     let response = client.chat(&request).await.context("工具调用请求失败")?;
 
-    if let Some(calls) = response.tool_calls() {
+    if let Some(calls) = response.tool_calls.as_ref() {
         let calls = calls.to_vec();
 
         println!("模型请求调用 {} 个工具：", calls.len());
         messages.push(Message::assistant_with_tool_calls(&calls));
 
         for call in &calls {
-            println!("\n工具名：{}", call.name());
-            println!("原始参数：{}", call.arguments());
+            println!("\n工具名：{}", call.name);
+            println!("原始参数：{}", call.arguments);
 
             let result = dispatch_tool(call).context("本地工具分发失败")?;
-            println!("工具执行结果：{}", result.content());
-            messages.push(Message::tool_result(call.id(), result.content()));
+            println!("工具执行结果：{}", result.content);
+            messages.push(Message::tool_result(&call.id, &result.content));
         }
 
         let request = ChatRequest::new(&messages).build();
@@ -84,9 +84,9 @@ async fn main() -> Result<()> {
             .chat(&request)
             .await
             .context("工具结果回填后继续请求失败")?;
-        println!("\n最终回复：\n{}", final_response.content());
+        println!("\n最终回复：\n{}", final_response.content);
     } else {
-        println!("模型未触发工具调用，直接回复：\n{}", response.content());
+        println!("模型未触发工具调用，直接回复：\n{}", response.content);
     }
 
     Ok(())
@@ -103,7 +103,7 @@ fn init_tracing() {
 }
 
 fn dispatch_tool(call: &ToolCall) -> Result<ToolResult> {
-    match call.name() {
+    match call.name.as_str() {
         "get_weather" => {
             let arguments = call.arguments_json().context("解析工具参数失败")?;
             let city = arguments
@@ -131,7 +131,7 @@ fn dispatch_tool(call: &ToolCall) -> Result<ToolResult> {
                 }),
             };
 
-            Ok(ToolResult::json(call.id(), result))
+            Ok(ToolResult::json(&call.id, result))
         }
         other => bail!("未实现的工具：{other}"),
     }

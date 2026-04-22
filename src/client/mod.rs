@@ -9,12 +9,12 @@ use futures_util::{Stream, StreamExt, stream};
 use reqwest::{Response, StatusCode, header::RETRY_AFTER};
 
 use crate::{
-    ChatResponse, LlmError, Message, Provider, ProviderAdapter, StreamChunk, Tool, ToolChoice,
+    ChatResponse, LlmError, Message, Provider, ProviderAdapter, ReasoningEffort, StreamChunk,
+    Tool, ToolChoice,
     provider::{compatible::CompatibleAdapter, openai::OpenAiAdapter, qwen::QwenAdapter},
-    types::response::ReasoningEffort,
 };
 
-pub mod builder;
+mod builder;
 mod config;
 
 use self::config::{ProviderConfig, ThinkingCapability};
@@ -43,9 +43,9 @@ pub struct ChatRequestBuilder {
 /// 构建完成后可以分别交给 [`Client::chat`] 与 [`Client::chat_stream`] 执行。
 #[derive(Debug, Clone)]
 pub struct ChatRequest {
-    messages: Vec<Message>,
-    tools: Option<Vec<Tool>>,
-    options: RequestOptions,
+    pub messages: Vec<Message>,
+    pub tools: Option<Vec<Tool>>,
+    pub options: RequestOptions,
 }
 
 impl ChatRequest {
@@ -153,20 +153,6 @@ impl ChatRequestBuilder {
     }
 }
 
-impl ChatRequest {
-    pub fn messages(&self) -> &[Message] {
-        &self.messages
-    }
-
-    pub fn tools(&self) -> Option<&[Tool]> {
-        self.tools.as_deref()
-    }
-
-    pub fn options(&self) -> &RequestOptions {
-        &self.options
-    }
-}
-
 #[derive(Clone)]
 pub struct Client {
     provider_config: ProviderConfig,
@@ -209,7 +195,7 @@ impl Client {
     /// - [`LlmError::NetworkError`]：当网络请求失败时触发
     /// - [`LlmError::ParseError`]：当响应体解析失败时触发
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResponse, LlmError> {
-        self.send_chat(request.messages(), request.tools(), request.options())
+        self.send_chat(&request.messages, request.tools.as_deref(), &request.options)
             .await
     }
 
@@ -220,7 +206,7 @@ impl Client {
     /// - [`LlmError::RateLimitError`]：当接口返回 `429` 时触发
     /// - [`LlmError::NetworkError`]：当网络请求失败时触发
     pub async fn chat_stream(&self, request: &ChatRequest) -> Result<ChatStream, LlmError> {
-        self.start_chat_stream(request.messages(), request.tools(), request.options())
+        self.start_chat_stream(&request.messages, request.tools.as_deref(), &request.options)
             .await
     }
 
@@ -651,26 +637,26 @@ mod tests {
             .parallel_tool_calls(true)
             .build();
 
-        assert_eq!(request.messages().len(), 1);
-        assert_eq!(request.tools().map(<[_]>::len), Some(1));
+        assert_eq!(request.messages.len(), 1);
+        assert_eq!(request.tools.as_ref().map(Vec::len), Some(1));
         assert_eq!(
-            request.options().provider_options.get("max_completion_tokens"),
+            request.options.provider_options.get("max_completion_tokens"),
             Some(&json!(4096))
         );
         assert_eq!(
-            request.options().provider_options.get("metadata"),
+            request.options.provider_options.get("metadata"),
             Some(&json!({ "tier": "pro" }))
         );
-        assert_eq!(request.options().temperature, Some(0.7));
-        assert_eq!(request.options().top_p, Some(0.9));
-        assert_eq!(request.options().max_tokens, Some(2048));
-        assert_eq!(request.options().presence_penalty, Some(0.3));
-        assert_eq!(request.options().frequency_penalty, Some(0.1));
-        assert!(request.options().thinking);
-        assert_eq!(request.options().parallel_tool_calls, Some(true));
+        assert_eq!(request.options.temperature, Some(0.7));
+        assert_eq!(request.options.top_p, Some(0.9));
+        assert_eq!(request.options.max_tokens, Some(2048));
+        assert_eq!(request.options.presence_penalty, Some(0.3));
+        assert_eq!(request.options.frequency_penalty, Some(0.1));
+        assert!(request.options.thinking);
+        assert_eq!(request.options.parallel_tool_calls, Some(true));
         assert_eq!(
             request
-                .options()
+                .options
                 .tool_choice
                 .as_ref()
                 .and_then(ToolChoice::function_name),
@@ -689,13 +675,13 @@ mod tests {
             ])
             .build();
 
-        assert_eq!(request.options().provider_options.get("seed"), Some(&json!(8)));
+        assert_eq!(request.options.provider_options.get("seed"), Some(&json!(8)));
         assert_eq!(
-            request.options().provider_options.get("metadata"),
+            request.options.provider_options.get("metadata"),
             Some(&json!({ "tier": "pro" }))
         );
         assert_eq!(
-            request.options().provider_options.get("max_completion_tokens"),
+            request.options.provider_options.get("max_completion_tokens"),
             Some(&json!(2048))
         );
     }

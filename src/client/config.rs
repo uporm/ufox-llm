@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
-use crate::{Provider, ToolChoice, types::response::ReasoningEffort};
+use crate::{Provider, ReasoningEffort, ToolChoice};
 
 /// Provider 级别的客户端运行时配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,17 +27,17 @@ pub(crate) struct ProviderConfig {
 /// `ChatRequest::new(...)` 返回的构建器链式设置。
 #[derive(Debug, Clone, Default)]
 pub struct RequestOptions {
-    pub(crate) temperature: Option<f32>,
-    pub(crate) top_p: Option<f32>,
-    pub(crate) max_tokens: Option<u32>,
-    pub(crate) presence_penalty: Option<f32>,
-    pub(crate) frequency_penalty: Option<f32>,
-    pub(crate) provider_options: Map<String, Value>,
-    pub(crate) thinking: bool,
-    pub(crate) thinking_budget: Option<u32>,
-    pub(crate) reasoning_effort: Option<ReasoningEffort>,
-    pub(crate) tool_choice: Option<ToolChoice>,
-    pub(crate) parallel_tool_calls: Option<bool>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub max_tokens: Option<u32>,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub provider_options: Map<String, Value>,
+    pub thinking: bool,
+    pub thinking_budget: Option<u32>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub tool_choice: Option<ToolChoice>,
+    pub parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

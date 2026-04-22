@@ -228,9 +228,9 @@ mod tests {
 
         let response = parse_chat_response(body.as_bytes()).expect("响应应解析成功");
 
-        assert_eq!(response.content(), "你好，我可以帮你审查代码。");
-        assert_eq!(response.finish_reason(), Some(&FinishReason::Stop));
-        assert_eq!(response.usage().expect("应包含用量").total_tokens(), 20);
+        assert_eq!(response.content, "你好，我可以帮你审查代码。");
+        assert_eq!(response.finish_reason.as_ref(), Some(&FinishReason::Stop));
+        assert_eq!(response.usage.as_ref().expect("应包含用量").total, 20);
     }
 
     #[test]
@@ -261,10 +261,10 @@ mod tests {
 
         assert!(response.has_tool_calls());
         assert_eq!(
-            response.tool_calls().expect("应包含工具调用")[0].name(),
+            response.tool_calls.as_ref().expect("应包含工具调用")[0].name,
             "get_weather"
         );
-        assert_eq!(response.finish_reason(), Some(&FinishReason::ToolCalls));
+        assert_eq!(response.finish_reason.as_ref(), Some(&FinishReason::ToolCalls));
     }
 
     #[test]
@@ -292,7 +292,7 @@ mod tests {
 
         let response = parse_chat_response(body.as_bytes()).expect("响应应解析成功");
 
-        assert_eq!(response.content(), "第一段。第二段。");
+        assert_eq!(response.content, "第一段。第二段。");
     }
 
     #[test]
@@ -319,9 +319,9 @@ mod tests {
 
         let response = parse_chat_response(body.as_bytes()).expect("响应应解析成功");
 
-        assert_eq!(response.thinking_content(), Some("先分析问题"));
-        assert_eq!(response.thinking_tokens(), Some(12));
-        assert_eq!(response.content(), "最终答案");
+        assert_eq!(response.thinking_content.as_deref(), Some("先分析问题"));
+        assert_eq!(response.thinking_tokens, Some(12));
+        assert_eq!(response.content, "最终答案");
     }
 
     #[test]

@@ -166,25 +166,26 @@ struct QwenMessage {
 
 impl QwenMessage {
     fn from_public_message(message: &Message) -> Result<Self, LlmError> {
-        let role = match message.role() {
-            Role::System | Role::User | Role::Assistant | Role::Tool => message.role().as_str(),
+        let role = match message.role {
+            Role::System | Role::User | Role::Assistant | Role::Tool => message.role.as_str(),
         };
 
         Ok(Self {
             role,
-            content: if message.role() == Role::Assistant
-                && message.tool_calls().is_some()
-                && matches!(message.content(), Content::Text(text) if text.is_empty())
+            content: if message.role == Role::Assistant
+                && message.tool_calls.is_some()
+                && matches!(&message.content, Content::Text(text) if text.is_empty())
             {
                 None
             } else {
-                Some(QwenMessageContent::from_public_content(message.content())?)
+                Some(QwenMessageContent::from_public_content(&message.content)?)
             },
-            name: message.name().map(ToOwned::to_owned),
+            name: message.name.clone(),
             tool_calls: message
-                .tool_calls()
+                .tool_calls
+                .as_deref()
                 .map(QwenOutboundToolCall::from_public_tool_calls),
-            tool_call_id: message.tool_call_id().map(ToOwned::to_owned),
+            tool_call_id: message.tool_call_id.clone(),
         })
     }
 }
@@ -255,11 +256,11 @@ impl QwenOutboundToolCall {
         tool_calls
             .iter()
             .map(|tool_call| Self {
-                id: tool_call.id().to_string(),
+                id: tool_call.id.clone(),
                 kind: "function",
                 function: QwenOutboundToolFunction {
-                    name: tool_call.name().to_string(),
-                    arguments: tool_call.arguments().to_string(),
+                    name: tool_call.name.clone(),
+                    arguments: tool_call.arguments.clone(),
                 },
             })
             .collect()
@@ -295,8 +296,8 @@ struct QwenFunctionTool {
 impl QwenFunctionTool {
     fn from_public_tool(tool: &Tool) -> Self {
         Self {
-            name: tool.name().to_string(),
-            description: tool.description().map(ToOwned::to_owned),
+            name: tool.name.clone(),
+            description: tool.description.clone(),
             parameters: build_parameters_schema(tool),
         }
     }
@@ -306,14 +307,14 @@ fn build_parameters_schema(tool: &Tool) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
 
-    for parameter in tool.parameters() {
+    for parameter in &tool.parameters {
         properties.insert(
-            parameter.name().to_string(),
-            build_parameter_schema(parameter.json_type(), parameter.description()),
+            parameter.name.clone(),
+            build_parameter_schema(&parameter.json_type, &parameter.description),
         );
 
-        if parameter.required() {
-            required.push(parameter.name().to_string());
+        if parameter.required {
+            required.push(parameter.name.clone());
         }
     }
 
@@ -371,13 +372,13 @@ fn image_source_to_qwen_value(source: &ImageSource) -> Result<String, LlmError> 
 }
 
 fn image_file_to_data_url(file: &ImageFile) -> Result<String, LlmError> {
-    let bytes = fs::read(file.path()).map_err(|error| {
+    let bytes = fs::read(&file.path).map_err(|error| {
         LlmError::StreamError(format!(
             "读取本地图片文件失败：路径={}，错误={error}",
-            file.path().display()
+            file.path.display()
         ))
     })?;
-    let mime_type = file.mime_type().unwrap_or("application/octet-stream");
+    let mime_type = file.mime_type.as_deref().unwrap_or("application/octet-stream");
     let encoded = STANDARD.encode(bytes);
 
     Ok(format!("data:{mime_type};base64,{encoded}"))

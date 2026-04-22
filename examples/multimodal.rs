@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let request = ChatRequest::new(&messages).build();
     let response = client.chat(&request).await.context("多模态请求失败")?;
 
-    println!("模型回复：\n{}", response.content());
+    println!("模型回复：\n{}", response.content);
 
     Ok(())
 }

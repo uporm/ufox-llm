@@ -4,7 +4,7 @@
 
 use crate::{LlmError, StreamChunk};
 
-use crate::provider::openai::stream::OpenAiStreamParser;
+use crate::provider::openai::OpenAiStreamParser;
 
 /// 兼容 `OpenAI` 协议的流式解析器。
 #[derive(Debug, Default)]
@@ -45,12 +45,6 @@ impl CompatibleStreamParser {
     }
 }
 
-/// 判断事件是否为兼容 `OpenAI` 协议的 `[DONE]` 终止标记。
-#[must_use]
-pub fn is_done_event(event_data: &str) -> bool {
-    crate::provider::openai::stream::is_done_event(event_data)
-}
-
 fn rewrite_provider_in_stream_error(error: LlmError) -> LlmError {
     match error {
         LlmError::StreamError(message) => {
@@ -62,7 +56,7 @@ fn rewrite_provider_in_stream_error(error: LlmError) -> LlmError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompatibleStreamParser, is_done_event};
+    use super::CompatibleStreamParser;
 
     #[test]
     fn compatible_openai() {
@@ -72,8 +66,7 @@ mod tests {
             .expect("事件应解析成功")
             .expect("应产出文本增量");
 
-        assert_eq!(chunk.delta(), "你");
-        assert!(is_done_event("[DONE]"));
+        assert_eq!(chunk.delta, "你");
     }
 
     #[test]
@@ -87,6 +80,6 @@ mod tests {
 
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].is_thinking());
-        assert_eq!(chunks[1].delta(), "再回答");
+        assert_eq!(chunks[1].delta, "再回答");
     }
 }

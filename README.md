@@ -64,7 +64,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 
     let request = ChatRequest::new(&messages).build();
     let response = client.chat(&request).await?;
-    println!("{}", response.content());
+    println!("{}", response.content);
 
     Ok(())
 }
@@ -91,8 +91,8 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
 
-        if !chunk.delta().is_empty() {
-            print!("{}", chunk.delta());
+        if !chunk.delta.is_empty() {
+            print!("{}", chunk.delta);
         }
     }
 
@@ -123,10 +123,10 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         .build();
     let response = client.chat(&request).await?;
 
-    if let Some(thinking) = response.thinking_content() {
+    if let Some(thinking) = response.thinking_content.as_deref() {
         println!("=== 思考过程 ===\n{thinking}");
     }
-    println!("=== 最终回复 ===\n{}", response.content());
+    println!("=== 最终回复 ===\n{}", response.content);
 
     let stream_request = ChatRequest::new(&messages).thinking(true).build();
     let mut stream = client.chat_stream(&stream_request).await?;
@@ -170,12 +170,12 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 
     let first_request = ChatRequest::new(&messages).build();
     let first = client.chat(&first_request).await?;
-    messages.push(Message::assistant(first.content()));
+    messages.push(Message::assistant(&first.content));
 
     messages.push(Message::user("请再补充两个它对并发编程的帮助点。"));
     let second_request = ChatRequest::new(&messages).build();
     let second = client.chat(&second_request).await?;
-    messages.push(Message::assistant(second.content()));
+    messages.push(Message::assistant(&second.content));
 
     Ok(())
 }
@@ -208,7 +208,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
 
     let request = ChatRequest::new(&messages).build();
     let response = client.chat(&request).await?;
-    println!("{}", response.content());
+    println!("{}", response.content);
 
     Ok(())
 }
@@ -262,7 +262,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         .build();
     let response = client.chat(&request).await?;
 
-    if let Some(calls) = response.tool_calls() {
+    if let Some(calls) = response.tool_calls.as_ref() {
         let calls = calls.to_vec();
         messages.push(Message::assistant_with_tool_calls(&calls));
 
@@ -271,7 +271,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
             let city = args["city"].as_str().unwrap_or("未知城市");
 
             let result = ToolResult::json(
-                call.id(),
+                &call.id,
                 json!({
                     "city": city,
                     "weather": "晴",
@@ -280,12 +280,12 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
                 }),
             );
 
-            messages.push(Message::tool_result(call.id(), result.content()));
+            messages.push(Message::tool_result(&call.id, &result.content));
         }
 
         let request = ChatRequest::new(&messages).build();
         let final_response = client.chat(&request).await?;
-        println!("{}", final_response.content());
+        println!("{}", final_response.content);
     }
 
     Ok(())

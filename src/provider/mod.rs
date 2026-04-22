@@ -7,9 +7,9 @@ use serde_json::Value;
 
 use crate::{ChatResponse, LlmError, Message, StreamChunk, Tool, client::RequestOptions};
 
-pub mod compatible;
-pub mod openai;
-pub mod qwen;
+pub(crate) mod compatible;
+pub(crate) mod openai;
+pub(crate) mod qwen;
 
 /// `LLM` 供应商类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

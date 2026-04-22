@@ -104,7 +104,7 @@ pub enum DeltaType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum DeltaKind {
+pub enum DeltaKind {
     Thinking,
     Content,
 }
@@ -115,11 +115,11 @@ enum DeltaKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     /// 输入（提示词）消耗的 token 数。
-    prompt: u32,
+    pub prompt: u32,
     /// 输出（补全）消耗的 token 数。
-    completion: u32,
+    pub completion: u32,
     /// 总 token 数（`prompt + completion`）。
-    total: u32,
+    pub total: u32,
 }
 
 impl Usage {
@@ -130,18 +130,6 @@ impl Usage {
             total: prompt_tokens + completion_tokens,
         }
     }
-
-    pub const fn prompt_tokens(&self) -> u32 {
-        self.prompt
-    }
-
-    pub const fn completion_tokens(&self) -> u32 {
-        self.completion
-    }
-
-    pub const fn total_tokens(&self) -> u32 {
-        self.total
-    }
 }
 
 /// 一次完整的聊天响应。
@@ -149,12 +137,12 @@ impl Usage {
 /// 该结构体用于表达非流式请求的最终返回值，也可作为流式聚合完成后的统一结果对象。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatResponse {
-    content: String,
-    thinking_content: Option<String>,
-    thinking_tokens: Option<u32>,
-    tool_calls: Option<Vec<ToolCall>>,
-    finish_reason: Option<FinishReason>,
-    usage: Option<Usage>,
+    pub content: String,
+    pub thinking_content: Option<String>,
+    pub thinking_tokens: Option<u32>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub finish_reason: Option<FinishReason>,
+    pub usage: Option<Usage>,
 }
 
 impl ChatResponse {
@@ -199,30 +187,6 @@ impl ChatResponse {
         self
     }
 
-    pub fn content(&self) -> &str {
-        &self.content
-    }
-
-    pub fn thinking_content(&self) -> Option<&str> {
-        self.thinking_content.as_deref()
-    }
-
-    pub const fn thinking_tokens(&self) -> Option<u32> {
-        self.thinking_tokens
-    }
-
-    pub fn tool_calls(&self) -> Option<&[ToolCall]> {
-        self.tool_calls.as_deref()
-    }
-
-    pub fn finish_reason(&self) -> Option<&FinishReason> {
-        self.finish_reason.as_ref()
-    }
-
-    pub const fn usage(&self) -> Option<&Usage> {
-        self.usage.as_ref()
-    }
-
     pub fn has_tool_calls(&self) -> bool {
         self.tool_calls
             .as_ref()
@@ -236,11 +200,11 @@ impl ChatResponse {
 /// 可能同时携带 `finish_reason`、`usage` 或最终聚合完成的工具调用列表。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamChunk {
-    delta: String,
-    delta_kind: DeltaKind,
-    tool_calls: Option<Vec<ToolCall>>,
-    finish_reason: Option<FinishReason>,
-    usage: Option<Usage>,
+    pub delta: String,
+    pub delta_kind: DeltaKind,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub finish_reason: Option<FinishReason>,
+    pub usage: Option<Usage>,
 }
 
 impl StreamChunk {
@@ -285,10 +249,6 @@ impl StreamChunk {
         self
     }
 
-    pub fn delta(&self) -> &str {
-        &self.delta
-    }
-
     pub fn delta_type(&self) -> DeltaType {
         match self.delta_kind {
             DeltaKind::Thinking => DeltaType::Thinking(self.delta.clone()),
@@ -298,18 +258,6 @@ impl StreamChunk {
 
     pub const fn is_thinking(&self) -> bool {
         matches!(self.delta_kind, DeltaKind::Thinking)
-    }
-
-    pub fn tool_calls(&self) -> Option<&[ToolCall]> {
-        self.tool_calls.as_deref()
-    }
-
-    pub fn finish_reason(&self) -> Option<&FinishReason> {
-        self.finish_reason.as_ref()
-    }
-
-    pub const fn usage(&self) -> Option<&Usage> {
-        self.usage.as_ref()
     }
 
     pub fn has_tool_calls(&self) -> bool {
@@ -332,9 +280,9 @@ mod tests {
     fn token() {
         let usage = Usage::new(15, 27);
 
-        assert_eq!(usage.prompt_tokens(), 15);
-        assert_eq!(usage.completion_tokens(), 27);
-        assert_eq!(usage.total_tokens(), 42);
+        assert_eq!(usage.prompt, 15);
+        assert_eq!(usage.completion, 27);
+        assert_eq!(usage.total, 42);
     }
 
     #[test]
@@ -345,10 +293,10 @@ mod tests {
 
         assert!(response.has_tool_calls());
         assert_eq!(
-            response.tool_calls().expect("应包含工具调用")[0].name(),
+            response.tool_calls.as_ref().expect("应包含工具调用")[0].name,
             "get_weather"
         );
-        assert_eq!(response.finish_reason(), Some(&FinishReason::ToolCalls));
+        assert_eq!(response.finish_reason.as_ref(), Some(&FinishReason::ToolCalls));
     }
 
     #[test]
@@ -358,7 +306,7 @@ mod tests {
             .with_usage(Usage::new(10, 8));
 
         assert!(chunk.is_terminal());
-        assert_eq!(chunk.usage().expect("应包含用量").total_tokens(), 18);
+        assert_eq!(chunk.usage.as_ref().expect("应包含用量").total, 18);
     }
 
     #[test]
@@ -375,9 +323,9 @@ mod tests {
             .with_thinking_content("先分析条件")
             .with_thinking_tokens(42);
 
-        assert_eq!(response.thinking_content(), Some("先分析条件"));
-        assert_eq!(response.thinking_tokens(), Some(42));
-        assert_eq!(response.content(), "最终答案");
+        assert_eq!(response.thinking_content.as_deref(), Some("先分析条件"));
+        assert_eq!(response.thinking_tokens, Some(42));
+        assert_eq!(response.content, "最终答案");
     }
 
     #[test]
