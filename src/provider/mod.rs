@@ -23,6 +23,19 @@ use crate::{
     },
 };
 
+/// 选择与 OpenAI 兼容 endpoint 通信时使用的线路协议。
+///
+/// 对于 `Provider::OpenAI`，默认使用 `Responses`；
+/// 对于其他 provider，默认使用 `ChatCompletions`。
+/// 可通过 `ClientBuilder::api_protocol` 显式覆盖。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiProtocol {
+    /// OpenAI Chat Completions 协议（`POST /chat/completions`）。
+    ChatCompletions,
+    /// OpenAI Responses 协议（`POST /responses`）。
+    Responses,
+}
+
 #[async_trait]
 pub(crate) trait ProviderAdapter: Send + Sync {
     /// 返回稳定的 provider 名称，用于错误字段、日志与指标标签。
@@ -154,17 +167,28 @@ impl Provider {
         }
     }
 
+    /// 返回该 provider 的默认协议。
+    pub fn default_protocol(&self) -> ApiProtocol {
+        match self {
+            Provider::OpenAI => ApiProtocol::Responses,
+            _ => ApiProtocol::ChatCompletions,
+        }
+    }
+
     /// adapter 创建的唯一入口。
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn into_adapter(
         &self,
+        protocol: ApiProtocol,
         api_key: &str,
         base_url: &str,
         transport: &crate::middleware::Transport,
     ) -> Result<Box<dyn ProviderAdapter>, LlmError> {
         match self {
-            Provider::Compatible => openai::build("compatible", api_key, base_url, transport),
-            Provider::OpenAI => openai::build("openai", api_key, base_url, transport),
+            Provider::Compatible => {
+                openai::build("compatible", protocol, api_key, base_url, transport)
+            }
+            Provider::OpenAI => openai::build("openai", protocol, api_key, base_url, transport),
             Provider::Anthropic => anthropic::build(api_key, base_url, transport),
             Provider::Doubao => doubao::build(api_key, base_url, transport),
             Provider::Qwen => qwen::build(api_key, base_url, transport),

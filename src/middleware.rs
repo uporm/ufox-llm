@@ -94,7 +94,7 @@ impl Transport {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, LlmError> {
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         if let Some(rate_limit) = &self.rate_limit {
             let _rpm = rate_limit.requests_per_minute;
@@ -110,27 +110,45 @@ impl Transport {
                 message: "请求体不可克隆（含流式 body），无法安全重试".into(),
             })?;
 
+            let request_started_at = Instant::now();
             let result = req.send().await;
             match result {
                 Err(err) if err.is_timeout() => {
+                    let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
                     let timeout_error = if err.is_connect() {
                         self.connect_timeout_error()
                     } else {
                         self.request_timeout_error()
                     };
+                    tracing::warn!(
+                        attempt,
+                        elapsed_ms,
+                        is_connect = err.is_connect(),
+                        "请求超时，准备重试"
+                    );
                     if attempt >= self.retry.max_retries {
                         return Err(timeout_error);
                     }
                 }
-                Err(err) if err.is_connect() && attempt < self.retry.max_retries => {}
+                Err(err) if err.is_connect() && attempt < self.retry.max_retries => {
+                    let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
+                    tracing::warn!(attempt, elapsed_ms, "连接失败，准备重试");
+                }
                 Err(err) => return Err(LlmError::transport("发送请求", err)),
                 Ok(response) => {
+                    let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
                     let status = response.status().as_u16();
                     if self.retry.retryable_status.contains(&status)
                         && attempt < self.retry.max_retries
                     {
-                        tracing::warn!(attempt, status, "retryable status，进入退避重试");
+                        tracing::warn!(
+                            attempt,
+                            status,
+                            elapsed_ms,
+                            "收到可重试状态码，进入退避重试"
+                        );
                     } else {
+                        tracing::info!(attempt, status, elapsed_ms, "HTTP 请求完成");
                         return Ok(response);
                     }
                 }
@@ -146,10 +164,26 @@ impl Transport {
         }
     }
 
-    async fn send_once(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response, LlmError> {
+    async fn send_once(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, LlmError> {
+        let request_started_at = std::time::Instant::now();
         match request.send().await {
-            Ok(response) => Ok(response),
+            Ok(response) => {
+                tracing::info!(
+                    status = response.status().as_u16(),
+                    elapsed_ms = request_started_at.elapsed().as_millis() as u64,
+                    "HTTP 请求完成（单次发送）"
+                );
+                Ok(response)
+            }
             Err(err) if err.is_timeout() => {
+                tracing::warn!(
+                    elapsed_ms = request_started_at.elapsed().as_millis() as u64,
+                    is_connect = err.is_connect(),
+                    "HTTP 请求超时（单次发送）"
+                );
                 if err.is_connect() {
                     Err(self.connect_timeout_error())
                 } else {

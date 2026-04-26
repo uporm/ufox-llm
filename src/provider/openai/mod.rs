@@ -1,240 +1,81 @@
+//! OpenAI 系 provider adapter 工厂。
+//!
+//! 本模块是 OpenAI 兼容协议实现的顶层入口，负责：
+//! - 声明子模块并控制可见性
+//! - 定义两套协议共用的常量与类型别名
+//! - 提供 [`build`] 工厂函数，根据 [`ApiProtocol`] 选择具体 adapter 实现
+//!
+//! ## 子模块职责
+//!
+//! | 模块 | 职责 |
+//! |------|------|
+//! | `chat_completions` | Chat Completions 协议 adapter（含流式状态机） |
+//! | `responses` | Responses 协议 adapter（含流式状态机） |
+//! | `http` | HTTP 构造 trait、错误映射、SSE 解析、token 用量解析 |
+//! | `media` | 媒体资源解析（URL / Base64 / 本地文件 → 字节 / 图片 URL） |
+//! | `audio` | 语音识别与语音合成（两套协议共用） |
+//! | `embedding` | 文本向量化（两套协议共用） |
+//! | `image` | 图片生成（两套协议共用） |
+
 mod audio;
-mod chat;
+mod chat_completions;
 mod embedding;
+mod http;
 mod image;
 mod media;
-mod stream;
+mod responses;
 
 #[cfg(test)]
 mod tests;
 
 /// OpenAI Chat Completions 接口路径。
 const CHAT_COMPLETIONS_PATH: &str = "/chat/completions";
+/// OpenAI Responses 接口路径。
+const RESPONSES_PATH: &str = "/responses";
 
 use std::pin::Pin;
 
-use async_trait::async_trait;
 use futures::Stream;
 
 use crate::{
     error::LlmError,
     middleware::Transport,
-    types::{
-        request::{
-            ChatRequest, EmbeddingRequest, ImageGenRequest, SpeechToTextRequest,
-            TextToSpeechRequest, VideoGenRequest,
-        },
-        response::{
-            ChatChunk, ChatResponse, EmbeddingResponse, FinishReason, ImageGenResponse,
-            SpeechToTextResponse, TextToSpeechResponse, Usage, VideoGenResponse,
-        },
-    },
+    provider::ApiProtocol,
+    types::response::ChatChunk,
 };
 
 use super::ProviderAdapter;
+use chat_completions::ChatCompletionsAdapter;
+use responses::ResponsesAdapter;
 
-pub(super) type ChatChunkStream = Pin<Box<dyn Stream<Item = Result<ChatChunk, LlmError>> + Send>>;
-
-/// OpenAI 兼容协议的适配器实现。
-pub(crate) struct OpenAiAdapter {
-    transport: Transport,
-    api_key: String,
-    base_url: String,
-    provider_name: &'static str,
-}
-
-impl OpenAiAdapter {
-    fn new(
-        provider_name: &'static str,
-        api_key: &str,
-        base_url: &str,
-        transport: Transport,
-    ) -> Self {
-        Self {
-            transport,
-            api_key: api_key.to_owned(),
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            provider_name,
-        }
-    }
-
-    fn name(&self) -> &'static str {
-        self.provider_name
-    }
-
-    fn request_json(&self, path: &str) -> reqwest::RequestBuilder {
-        self.transport
-            .client()
-            .post(format!("{}/{}", self.base_url, path.trim_start_matches('/')))
-            .bearer_auth(&self.api_key)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-    }
-
-    fn request_multipart(&self, path: &str) -> reqwest::RequestBuilder {
-        self.transport
-            .client()
-            .post(format!("{}/{}", self.base_url, path.trim_start_matches('/')))
-            .bearer_auth(&self.api_key)
-    }
-
-    fn map_error_response(&self, status: u16, body_text: &str) -> LlmError {
-        match status {
-            401 | 403 => LlmError::Authentication {
-                message: format!("[{}] {}", self.name(), body_text),
-            },
-            429 => LlmError::RateLimit {
-                retry_after_secs: None,
-            },
-            _ => LlmError::HttpStatus {
-                provider: self.name().into(),
-                status,
-                body: body_text.to_owned(),
-            },
-        }
-    }
-
-    fn parse_finish_reason(raw: Option<&str>) -> Option<FinishReason> {
-        match raw {
-            Some("stop") => Some(FinishReason::Stop),
-            Some("length") => Some(FinishReason::Length),
-            Some("tool_calls") => Some(FinishReason::ToolCalls),
-            Some("content_filter") => Some(FinishReason::ContentFilter),
-            Some(_) => Some(FinishReason::Other),
-            None => None,
-        }
-    }
-
-    fn parse_usage(raw: Option<&serde_json::Value>) -> Option<Usage> {
-        let raw = raw?;
-        Some(Usage {
-            prompt_tokens: Self::parse_usage_tokens(raw.get("prompt_tokens"))?,
-            completion_tokens: Self::parse_usage_tokens(raw.get("completion_tokens"))?,
-            total_tokens: Self::parse_usage_tokens(raw.get("total_tokens"))?,
-        })
-    }
-
-    fn parse_usage_tokens(raw: Option<&serde_json::Value>) -> Option<u32> {
-        raw?.as_u64()?.try_into().ok()
-    }
-
-    fn stream_read_timeout_error(read_timeout_ms: u64) -> LlmError {
-        LlmError::request_timeout(
-            "读取流式响应",
-            read_timeout_ms,
-            "流式连接已建立，但在读取超时窗口内未收到新数据；可尝试增大 read_timeout_secs，或检查 provider 是否持续输出分片",
-        )
-    }
-
-    fn map_stream_read_error(read_timeout_ms: u64, err: reqwest::Error) -> LlmError {
-        if err.is_timeout() {
-            Self::stream_read_timeout_error(read_timeout_ms)
-        } else {
-            LlmError::transport("读取流式响应", err)
-        }
-    }
-}
-
-#[async_trait]
-impl ProviderAdapter for OpenAiAdapter {
-    fn name(&self) -> &'static str {
-        self.provider_name
-    }
-
-    async fn chat(&self, model: &str, req: ChatRequest) -> Result<ChatResponse, LlmError> {
-        self.execute_chat(model, req).await
-    }
-
-    async fn chat_stream(
-        &self,
-        model: &str,
-        req: ChatRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, LlmError>> + Send>>, LlmError> {
-        self.execute_chat_stream(model, req).await
-    }
-
-    async fn embed(
-        &self,
-        model: &str,
-        req: EmbeddingRequest,
-    ) -> Result<EmbeddingResponse, LlmError> {
-        self.execute_embed(model, req).await
-    }
-
-    async fn speech_to_text(
-        &self,
-        model: &str,
-        req: SpeechToTextRequest,
-    ) -> Result<SpeechToTextResponse, LlmError> {
-        self.execute_speech_to_text(model, req).await
-    }
-
-    async fn text_to_speech(
-        &self,
-        model: &str,
-        req: TextToSpeechRequest,
-    ) -> Result<TextToSpeechResponse, LlmError> {
-        self.execute_text_to_speech(model, req).await
-    }
-
-    async fn generate_image(
-        &self,
-        model: &str,
-        req: ImageGenRequest,
-    ) -> Result<ImageGenResponse, LlmError> {
-        self.execute_generate_image(model, req).await
-    }
-
-    async fn generate_video(
-        &self,
-        model: &str,
-        req: VideoGenRequest,
-    ) -> Result<VideoGenResponse, LlmError> {
-        self.execute_generate_video(model, req).await
-    }
-}
+/// 两套协议共用的流式 chunk 输出类型别名。
+pub(super) type ChatChunkStream =
+    Pin<Box<dyn Stream<Item = Result<ChatChunk, LlmError>> + Send>>;
 
 /// 构造 OpenAI 兼容 provider adapter。
+///
+/// 根据 `protocol` 选择实现：
+/// - [`ApiProtocol::ChatCompletions`] → [`ChatCompletionsAdapter`]（`POST /chat/completions`）
+/// - [`ApiProtocol::Responses`] → [`ResponsesAdapter`]（`POST /responses`）
 pub(crate) fn build(
     provider_name: &'static str,
+    protocol: ApiProtocol,
     api_key: &str,
     base_url: &str,
     transport: &Transport,
 ) -> Result<Box<dyn ProviderAdapter>, LlmError> {
-    Ok(Box::new(OpenAiAdapter::new(
-        provider_name,
-        api_key,
-        base_url,
-        transport.clone(),
-    )))
-}
-
-#[cfg(test)]
-mod unit_tests {
-    use super::OpenAiAdapter;
-
-    #[test]
-    fn parse_usage_accepts_u32_range_values() {
-        let usage = OpenAiAdapter::parse_usage(Some(&serde_json::json!({
-                "prompt_tokens": 10,
-                "completion_tokens": 20,
-                "total_tokens": 30,
-            })))
-        .unwrap();
-
-        assert_eq!(usage.prompt_tokens, 10);
-        assert_eq!(usage.completion_tokens, 20);
-        assert_eq!(usage.total_tokens, 30);
-    }
-
-    #[test]
-    fn parse_usage_rejects_values_larger_than_u32() {
-        assert!(
-            OpenAiAdapter::parse_usage(Some(&serde_json::json!({
-                "prompt_tokens": u64::from(u32::MAX) + 1,
-                "completion_tokens": 20,
-                "total_tokens": 30,
-            })))
-            .is_none()
-        );
+    match protocol {
+        ApiProtocol::ChatCompletions => Ok(Box::new(ChatCompletionsAdapter::new(
+            provider_name,
+            api_key,
+            base_url,
+            transport.clone(),
+        ))),
+        ApiProtocol::Responses => Ok(Box::new(ResponsesAdapter::new(
+            provider_name,
+            api_key,
+            base_url,
+            transport.clone(),
+        ))),
     }
 }

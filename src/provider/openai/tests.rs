@@ -1,8 +1,8 @@
 use base64::Engine as _;
 use futures::StreamExt;
 use wiremock::{
-    matchers::{body_partial_json, header, method, path},
     Mock, MockServer, ResponseTemplate,
+    matchers::{body_partial_json, header, method, path},
 };
 
 use crate::{ChatRequest, Client, Provider};
@@ -148,6 +148,126 @@ data: [DONE]\n\n",
         Some(crate::FinishReason::ToolCalls)
     ));
     assert_eq!(second.usage.unwrap().total_tokens, 18);
+}
+
+#[tokio::test]
+async fn openai_chat_uses_responses_api_and_parses_reasoning() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("authorization", "Bearer test-key"))
+        .and(body_partial_json(serde_json::json!({
+            "model": "gpt-5",
+            "stream": false,
+            "store": false,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "resp_123",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [
+                        { "type": "summary_text", "text": "先做天气查询规划。" }
+                    ]
+                },
+                {
+                    "type": "message",
+                    "content": [
+                        { "type": "output_text", "text": "杭州今天多云。" }
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"Hangzhou\"}"
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 12,
+                "total_tokens": 22
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("gpt-5")
+        .build()
+        .unwrap();
+
+    let response = client
+        .chat(
+            ChatRequest::builder()
+                .user_text("杭州天气")
+                .thinking(true)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.text, "杭州今天多云。");
+    assert_eq!(response.thinking.as_deref(), Some("先做天气查询规划。"));
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].id, "call_1");
+    assert_eq!(response.usage.unwrap().total_tokens, 22);
+}
+
+#[tokio::test]
+async fn openai_chat_stream_uses_responses_events() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(body_partial_json(serde_json::json!({
+            "model": "gpt-5",
+            "stream": true,
+            "store": false,
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("content-type", "text/event-stream")
+                .set_body_string(
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n\
+data: {\"type\":\"response.reasoning_summary_part.added\",\"part\":{\"type\":\"summary_text\",\"text\":\"先规划调用。\"}}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"杭州\\\"}\"}],\"usage\":{\"input_tokens\":10,\"output_tokens\":8,\"total_tokens\":18}}}\n\n\
+data: [DONE]\n\n",
+                ),
+        )
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("gpt-5")
+        .build()
+        .unwrap();
+
+    let mut stream = client
+        .chat_stream(ChatRequest::builder().user_text("杭州天气").build())
+        .await
+        .unwrap();
+
+    let first = stream.next().await.unwrap().unwrap();
+    assert_eq!(first.thinking_delta.as_deref(), Some("先规划调用。"));
+
+    let second = stream.next().await.unwrap().unwrap();
+    assert_eq!(second.text_delta.as_deref(), Some("你好"));
+
+    let third = stream.next().await.unwrap().unwrap();
+    assert_eq!(third.tool_calls.len(), 1);
+    assert_eq!(third.tool_calls[0].tool_name, "get_weather");
+    assert_eq!(third.tool_calls[0].arguments, serde_json::json!({ "city": "杭州" }));
+    assert!(matches!(third.finish_reason, Some(crate::FinishReason::ToolCalls)));
+    assert_eq!(third.usage.unwrap().total_tokens, 18);
 }
 
 #[tokio::test]

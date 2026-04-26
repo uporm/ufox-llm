@@ -3,13 +3,14 @@ use futures::Stream;
 use crate::{
     error::LlmError,
     middleware::{RateLimitConfig, RetryConfig, Transport, TransportConfig},
-    provider::{Provider, ProviderAdapter},
+    provider::{ApiProtocol, Provider, ProviderAdapter},
     types::{request::*, response::*},
 };
 
 /// `Client` 构造器。
 pub struct ClientBuilder {
     provider: Option<Provider>,
+    api_protocol: Option<ApiProtocol>,
     base_url: Option<String>,
     api_key: Option<String>,
     model: Option<String>,
@@ -25,6 +26,7 @@ impl Default for ClientBuilder {
     fn default() -> Self {
         Self {
             provider: None,
+            api_protocol: None,
             base_url: None,
             api_key: None,
             model: None,
@@ -40,6 +42,15 @@ impl Default for ClientBuilder {
 impl ClientBuilder {
     pub fn provider(mut self, provider: Provider) -> Self {
         self.provider = Some(provider);
+        self
+    }
+
+    /// 显式指定线路协议。
+    ///
+    /// 不设置时按 provider 给默认值：`Provider::OpenAI` 默认 `Responses`，其余默认 `ChatCompletions`。
+    /// 仅 `Provider::OpenAI` 和 `Provider::Compatible` 支持 `ApiProtocol::Responses`。
+    pub fn api_protocol(mut self, protocol: ApiProtocol) -> Self {
+        self.api_protocol = Some(protocol);
         self
     }
 
@@ -107,6 +118,20 @@ impl ClientBuilder {
                 .to_owned(),
         };
 
+        let protocol = self.api_protocol.unwrap_or_else(|| provider.default_protocol());
+
+        // 仅 OpenAI 和 Compatible（指向自定义 endpoint）支持 Responses API。
+        if protocol == ApiProtocol::Responses
+            && !matches!(provider, Provider::OpenAI | Provider::Compatible)
+        {
+            return Err(LlmError::InvalidConfig {
+                message: format!(
+                    "ApiProtocol::Responses 仅支持 Provider::OpenAI 和 Provider::Compatible，当前 provider 为 {}",
+                    provider.name()
+                ),
+            });
+        }
+
         let transport = Transport::new(TransportConfig {
             timeout_secs: self.timeout_secs,
             connect_timeout_secs: self.connect_timeout_secs,
@@ -119,7 +144,7 @@ impl ClientBuilder {
                 requests_per_minute: rpm,
             }),
         });
-        let adapter = provider.into_adapter(&api_key, &base_url, &transport)?;
+        let adapter = provider.into_adapter(protocol, &api_key, &base_url, &transport)?;
 
         Ok(Client {
             adapter,
@@ -157,12 +182,16 @@ impl Client {
     pub fn from_env() -> Result<Self, LlmError> {
         // `.env` 需要覆盖已有环境变量，才能让本地显式配置具备最高优先级。
         let _ = dotenvy::dotenv_override();
-        let raw_provider = std::env::var("UFOX_LLM_PROVIDER")
-            .map_err(|_| LlmError::MissingConfig { field: "UFOX_LLM_PROVIDER" })?;
-        let api_key = std::env::var("UFOX_LLM_API_KEY")
-            .map_err(|_| LlmError::MissingConfig { field: "UFOX_LLM_API_KEY" })?;
-        let model = std::env::var("UFOX_LLM_MODEL")
-            .map_err(|_| LlmError::MissingConfig { field: "UFOX_LLM_MODEL" })?;
+        let raw_provider =
+            std::env::var("UFOX_LLM_PROVIDER").map_err(|_| LlmError::MissingConfig {
+                field: "UFOX_LLM_PROVIDER",
+            })?;
+        let api_key = std::env::var("UFOX_LLM_API_KEY").map_err(|_| LlmError::MissingConfig {
+            field: "UFOX_LLM_API_KEY",
+        })?;
+        let model = std::env::var("UFOX_LLM_MODEL").map_err(|_| LlmError::MissingConfig {
+            field: "UFOX_LLM_MODEL",
+        })?;
         let base_url = std::env::var("UFOX_LLM_BASE_URL").ok();
         let timeout_secs = Self::read_timeout_env("UFOX_LLM_TIMEOUT_SECS")?;
         let connect_timeout_secs = Self::read_timeout_env("UFOX_LLM_CONNECT_TIMEOUT_SECS")?;
@@ -250,17 +279,11 @@ impl Client {
         self.adapter.text_to_speech(&self.model, req).await
     }
 
-    pub async fn generate_image(
-        &self,
-        req: ImageGenRequest,
-    ) -> Result<ImageGenResponse, LlmError> {
+    pub async fn generate_image(&self, req: ImageGenRequest) -> Result<ImageGenResponse, LlmError> {
         self.adapter.generate_image(&self.model, req).await
     }
 
-    pub async fn generate_video(
-        &self,
-        req: VideoGenRequest,
-    ) -> Result<VideoGenResponse, LlmError> {
+    pub async fn generate_video(&self, req: VideoGenRequest) -> Result<VideoGenResponse, LlmError> {
         self.adapter.generate_video(&self.model, req).await
     }
 

@@ -20,6 +20,14 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
         )
         .await?;
 
+    if let Some(thinking) = output.thinking.as_deref()
+        && !thinking.is_empty()
+    {
+        println!("=== 思考过程 ===\n");
+        println!("{thinking}\n");
+    }
+
+    println!("=== 最终回答 ===\n");
     println!("{}", output.text);
     Ok(())
 }

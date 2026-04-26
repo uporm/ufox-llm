@@ -1,7 +1,29 @@
-use crate::types::content::{AudioFormat, ContentPart, MediaSource, Message, Role, Tool, ToolChoice, VideoFormat};
+use crate::types::content::{
+    AudioFormat, ContentPart, MediaSource, Message, Role, Tool, ToolChoice, VideoFormat,
+};
+
+/// 推理强度等级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// 返回协议层使用的字符串值。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
 
 /// 单次聊天请求。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub max_tokens: Option<u32>,
@@ -9,8 +31,35 @@ pub struct ChatRequest {
     pub top_p: Option<f32>,
     pub tools: Vec<Tool>,
     pub tool_choice: ToolChoice,
+    /// 是否启用 thinking 模式。
+    pub thinking: bool,
+    /// thinking 模式下允许使用的预算。
+    pub thinking_budget: Option<u32>,
+    /// 推理强度等级。
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// 是否允许并行发起多个工具调用。
+    pub parallel_tool_calls: Option<bool>,
     /// 透传给 provider 的差异化参数。
     pub extensions: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Default for ChatRequest {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            tools: Vec::new(),
+            tool_choice: Default::default(),
+            // 默认开启 thinking，避免调用方遗漏该能力。
+            thinking: true,
+            thinking_budget: None,
+            reasoning_effort: None,
+            parallel_tool_calls: None,
+            extensions: serde_json::Map::new(),
+        }
+    }
 }
 
 impl ChatRequest {
@@ -91,6 +140,30 @@ impl ChatRequestBuilder {
         self
     }
 
+    /// 设置是否启用 thinking 模式。
+    pub fn thinking(mut self, enabled: bool) -> Self {
+        self.inner.thinking = enabled;
+        self
+    }
+
+    /// 设置 thinking 模式下允许使用的预算。
+    pub fn thinking_budget(mut self, budget: u32) -> Self {
+        self.inner.thinking_budget = Some(budget);
+        self
+    }
+
+    /// 设置推理强度等级。
+    pub fn reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.inner.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// 设置是否允许并行发起多个工具调用。
+    pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
+        self.inner.parallel_tool_calls = Some(enabled);
+        self
+    }
+
     pub fn extension(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
         self.inner.extensions.insert(key.into(), value);
         self
@@ -149,7 +222,7 @@ pub struct VideoGenRequest {
 mod tests {
     use crate::types::content::{Message, Role, ToolChoice};
 
-    use super::ChatRequest;
+    use super::{ChatRequest, ReasoningEffort};
 
     #[test]
     fn system_message_is_inserted_at_head() {
@@ -189,5 +262,29 @@ mod tests {
 
         assert_eq!(request.messages.len(), 2);
         assert!(matches!(request.tool_choice, ToolChoice::Required));
+    }
+
+    #[test]
+    fn builder_sets_thinking_related_fields() {
+        let request = ChatRequest::builder()
+            .thinking(true)
+            .thinking_budget(2048)
+            .reasoning_effort(ReasoningEffort::High)
+            .parallel_tool_calls(false)
+            .build();
+
+        assert!(request.thinking);
+        assert_eq!(request.thinking_budget, Some(2048));
+        assert_eq!(request.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(request.parallel_tool_calls, Some(false));
+    }
+
+    #[test]
+    fn chat_request_defaults_to_thinking_enabled() {
+        let request = ChatRequest::default();
+
+        assert!(request.thinking);
+        assert_eq!(request.thinking_budget, None);
+        assert_eq!(request.reasoning_effort, None);
     }
 }
