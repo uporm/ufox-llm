@@ -51,15 +51,20 @@ impl HttpContext {
         &self.transport
     }
 
+    /// 返回鉴权使用的 API Key。
+    pub(super) fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    /// 返回标准化后的 base URL。
+    pub(super) fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// 返回 provider 名称。
     pub(super) fn provider_name(&self) -> &'static str {
         self.provider_name
     }
-}
-
-/// 暴露共享 HTTP 上下文的 adapter 能力。
-pub(super) trait HasHttpContext {
-    fn http_context(&self) -> &HttpContext;
 }
 
 /// 两套 adapter 共用的 HTTP 请求构造能力。
@@ -67,10 +72,24 @@ pub(super) trait HasHttpContext {
 /// `audio`、`embedding`、`image` 模块通过泛型参数 `A: OpenAiRequestBuilder` 调用请求方法，
 /// 无需为每套 adapter 各写一份实现。
 pub(super) trait OpenAiRequestBuilder {
-    fn transport(&self) -> &Transport;
-    fn api_key(&self) -> &str;
-    fn base_url(&self) -> &str;
-    fn provider_name(&self) -> &'static str;
+    /// 返回 adapter 持有的共享 HTTP 上下文。
+    fn http_context(&self) -> &HttpContext;
+
+    fn transport(&self) -> &Transport {
+        self.http_context().transport()
+    }
+
+    fn api_key(&self) -> &str {
+        self.http_context().api_key()
+    }
+
+    fn base_url(&self) -> &str {
+        self.http_context().base_url()
+    }
+
+    fn provider_name(&self) -> &'static str {
+        self.http_context().provider_name()
+    }
 
     /// 构造带有 `Authorization` 和 `Content-Type: application/json` 的 POST 请求。
     fn post_json(&self, path: &str) -> reqwest::RequestBuilder {
@@ -95,24 +114,6 @@ pub(super) trait OpenAiRequestBuilder {
                 path.trim_start_matches('/')
             ))
             .bearer_auth(self.api_key())
-    }
-}
-
-impl<T: HasHttpContext> OpenAiRequestBuilder for T {
-    fn transport(&self) -> &Transport {
-        &self.http_context().transport
-    }
-
-    fn api_key(&self) -> &str {
-        &self.http_context().api_key
-    }
-
-    fn base_url(&self) -> &str {
-        &self.http_context().base_url
-    }
-
-    fn provider_name(&self) -> &'static str {
-        self.http_context().provider_name
     }
 }
 
@@ -198,21 +199,20 @@ pub(super) fn parse_finish_reason(raw: Option<&str>) -> Option<FinishReason> {
 /// - Responses API: `input_tokens` / `output_tokens` / `total_tokens`
 pub(super) fn parse_usage(raw: Option<&serde_json::Value>) -> Option<Usage> {
     let raw = raw?;
+    let parse_tokens = |value: Option<&serde_json::Value>| -> Option<u32> {
+        value?.as_u64()?.try_into().ok()
+    };
+
     Some(Usage {
-        prompt_tokens: parse_usage_tokens(
+        prompt_tokens: parse_tokens(
             raw.get("prompt_tokens").or_else(|| raw.get("input_tokens")),
         )?,
-        completion_tokens: parse_usage_tokens(
+        completion_tokens: parse_tokens(
             raw.get("completion_tokens")
                 .or_else(|| raw.get("output_tokens")),
         )?,
-        total_tokens: parse_usage_tokens(raw.get("total_tokens"))?,
+        total_tokens: parse_tokens(raw.get("total_tokens"))?,
     })
-}
-
-/// 从单个 token 计数 JSON 值解析为 `u32`，超范围时返回 `None`。
-pub(super) fn parse_usage_tokens(raw: Option<&serde_json::Value>) -> Option<u32> {
-    raw?.as_u64()?.try_into().ok()
 }
 
 // ── 流式超时错误 ──────────────────────────────────────────────────────────────

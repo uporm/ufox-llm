@@ -20,7 +20,6 @@ use futures::Stream;
 
 use crate::{
     error::LlmError,
-    middleware::Transport,
     types::{
         content::{ContentPart, Message, Role, Tool, ToolCall, ToolChoice, ToolResultPayload},
         request::ChatRequest,
@@ -34,9 +33,7 @@ use crate::{
 use super::{
     RESPONSES_PATH,
     audio, embedding, image,
-    http::{
-        HasHttpContext, HttpContext, OpenAiRequestBuilder, parse_usage, send_json_request,
-    },
+    http::{HttpContext, OpenAiRequestBuilder, parse_usage, send_json_request},
     media::resolve_media_source_to_image_url,
 };
 use crate::provider::ProviderAdapter;
@@ -51,19 +48,13 @@ pub(super) struct ResponsesAdapter {
 }
 
 impl ResponsesAdapter {
-    pub(super) fn new(
-        provider_name: &'static str,
-        api_key: &str,
-        base_url: &str,
-        transport: Transport,
-    ) -> Self {
-        Self {
-            http_context: HttpContext::new(provider_name, api_key, base_url, transport),
-        }
+    /// 使用共享 HTTP 上下文构造 adapter。
+    pub(super) fn new(http_context: HttpContext) -> Self {
+        Self { http_context }
     }
 }
 
-impl HasHttpContext for ResponsesAdapter {
+impl OpenAiRequestBuilder for ResponsesAdapter {
     fn http_context(&self) -> &HttpContext {
         &self.http_context
     }
@@ -721,7 +712,7 @@ mod tests {
     use super::*;
 
     fn test_adapter() -> ResponsesAdapter {
-        ResponsesAdapter::new(
+        ResponsesAdapter::new(HttpContext::new(
             "openai",
             "test-key",
             "https://example.com",
@@ -732,7 +723,7 @@ mod tests {
                 retry: RetryConfig::default(),
                 rate_limit: None,
             }),
-        )
+        ))
     }
 
     #[tokio::test]

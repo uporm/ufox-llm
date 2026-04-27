@@ -20,7 +20,6 @@ use futures::Stream;
 
 use crate::{
     error::LlmError,
-    middleware::Transport,
     types::{
         content::{ContentPart, Message, Role, Tool, ToolCall, ToolChoice, ToolResultPayload},
         request::ChatRequest,
@@ -35,8 +34,8 @@ use super::{
     CHAT_COMPLETIONS_PATH,
     audio, embedding, image,
     http::{
-        HasHttpContext, HttpContext, OpenAiRequestBuilder, parse_finish_reason,
-        parse_usage, send_json_request,
+        HttpContext, OpenAiRequestBuilder, parse_finish_reason, parse_usage,
+        send_json_request,
     },
     media::resolve_media_source_to_image_url,
 };
@@ -52,19 +51,13 @@ pub(super) struct ChatCompletionsAdapter {
 }
 
 impl ChatCompletionsAdapter {
-    pub(super) fn new(
-        provider_name: &'static str,
-        api_key: &str,
-        base_url: &str,
-        transport: Transport,
-    ) -> Self {
-        Self {
-            http_context: HttpContext::new(provider_name, api_key, base_url, transport),
-        }
+    /// 使用共享 HTTP 上下文构造 adapter。
+    pub(super) fn new(http_context: HttpContext) -> Self {
+        Self { http_context }
     }
 }
 
-impl HasHttpContext for ChatCompletionsAdapter {
+impl OpenAiRequestBuilder for ChatCompletionsAdapter {
     fn http_context(&self) -> &HttpContext {
         &self.http_context
     }
@@ -538,7 +531,7 @@ mod tests {
     use super::stream::PartialToolCall;
 
     fn test_adapter() -> ChatCompletionsAdapter {
-        ChatCompletionsAdapter::new(
+        ChatCompletionsAdapter::new(HttpContext::new(
             "compatible",
             "test-key",
             "https://example.com",
@@ -549,7 +542,7 @@ mod tests {
                 retry: RetryConfig::default(),
                 rate_limit: None,
             }),
-        )
+        ))
     }
 
     #[tokio::test]

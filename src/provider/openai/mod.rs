@@ -46,6 +46,7 @@ use crate::{
 
 use super::ProviderAdapter;
 use chat_completions::ChatCompletionsAdapter;
+use http::HttpContext;
 use responses::ResponsesAdapter;
 
 /// 两套协议共用的流式 chunk 输出类型别名。
@@ -64,18 +65,9 @@ pub(crate) fn build(
     base_url: &str,
     transport: &Transport,
 ) -> Result<Box<dyn ProviderAdapter>, LlmError> {
+    let http_context = HttpContext::new(provider_name, api_key, base_url, transport.clone());
     match protocol {
-        ApiProtocol::ChatCompletions => Ok(Box::new(ChatCompletionsAdapter::new(
-            provider_name,
-            api_key,
-            base_url,
-            transport.clone(),
-        ))),
-        ApiProtocol::Responses => Ok(Box::new(ResponsesAdapter::new(
-            provider_name,
-            api_key,
-            base_url,
-            transport.clone(),
-        ))),
+        ApiProtocol::ChatCompletions => Ok(Box::new(ChatCompletionsAdapter::new(http_context))),
+        ApiProtocol::Responses => Ok(Box::new(ResponsesAdapter::new(http_context))),
     }
 }
