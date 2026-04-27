@@ -117,6 +117,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for call in &tool_calls {
             println!("\n[local-tool] 调用 {}", call.tool_name);
             let result = run_local_tool(&call.tool_name, &call.arguments)?;
+            println!("[local-tool] 结果 {}", serde_json::to_string(&result).unwrap());
             messages.push(Message {
                 role: Role::Tool,
                 content: vec![ContentPart::ToolResult(ToolResult {

@@ -197,7 +197,10 @@ impl ChatCompletionsAdapter {
         let entry = partials.entry(index).or_default();
 
         if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
-            entry.id = Some(id.to_owned());
+            match &mut entry.id {
+                Some(existing) => existing.push_str(id),
+                None => entry.id = Some(id.to_owned()),
+            }
         }
 
         let Some(function) = item.get("function").and_then(|value| value.as_object()) else {
@@ -212,13 +215,14 @@ impl ChatCompletionsAdapter {
         }
 
         if let Some(arguments) = function.get("arguments") {
-            let arguments = arguments
-                .as_str()
-                .ok_or_else(|| LlmError::ToolProtocol {
+            if let Some(arguments_str) = arguments.as_str() {
+                entry.arguments_seen = true;
+                entry.arguments.push_str(arguments_str);
+            } else if !arguments.is_null() {
+                return Err(LlmError::ToolProtocol {
                     message: "stream tool call arguments 不是字符串".into(),
-                })?;
-            entry.arguments_seen = true;
-            entry.arguments.push_str(arguments);
+                });
+            }
         }
 
         Ok(())
