@@ -17,7 +17,8 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
     let mut stream = client
         .chat_stream(
             ChatRequest::builder()
-                .user_text("Rust 是什么？请用一句话回答。")
+                .user_text("Rust 是什么？")
+                .thinking(true)
                 .build(),
         )
         .await?;

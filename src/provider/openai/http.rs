@@ -104,6 +104,18 @@ pub(super) trait OpenAiRequestBuilder {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
     }
 
+    /// 构造带有 `Authorization` 的 GET 请求。
+    fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.transport()
+            .client()
+            .get(format!(
+                "{}/{}",
+                self.base_url(),
+                path.trim_start_matches('/')
+            ))
+            .bearer_auth(self.api_key())
+    }
+
     /// 构造带有 `Authorization` 的 POST 请求（用于 multipart/form-data）。
     fn post_multipart(&self, path: &str) -> reqwest::RequestBuilder {
         self.transport()

@@ -151,6 +151,52 @@ data: [DONE]\n\n",
 }
 
 #[tokio::test]
+async fn compatible_chat_ignores_thinking_request_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "chatcmpl_ignored_thinking",
+            "model": "gpt-4o-mini",
+            "choices": [{
+                "message": {
+                    "content": "已忽略 thinking。"
+                },
+                "finish_reason": "stop"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::Compatible)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("gpt-4o-mini")
+        .build()
+        .unwrap();
+
+    let response = client
+        .chat(
+            ChatRequest::builder()
+                .user_text("杭州天气")
+                .thinking(true)
+                .thinking_budget(1024)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.text, "已忽略 thinking。");
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(body.get("thinking").is_none());
+    assert!(body.get("thinking_budget").is_none());
+}
+
+#[tokio::test]
 async fn openai_chat_uses_responses_api_and_parses_reasoning() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -217,6 +263,52 @@ async fn openai_chat_uses_responses_api_and_parses_reasoning() {
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].id, "call_1");
     assert_eq!(response.usage.unwrap().total_tokens, 22);
+}
+
+#[tokio::test]
+async fn openai_chat_ignores_thinking_request_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "resp_ignore_thinking",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [
+                    { "type": "output_text", "text": "已忽略 thinking。" }
+                ]
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("gpt-5")
+        .build()
+        .unwrap();
+
+    let response = client
+        .chat(
+            ChatRequest::builder()
+                .user_text("杭州天气")
+                .thinking(true)
+                .thinking_budget(1024)
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.text, "已忽略 thinking。");
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(body.get("reasoning").is_none());
 }
 
 #[tokio::test]
@@ -397,4 +489,149 @@ async fn openai_speech_to_text_parses_transcript() {
     assert_eq!(response.language.as_deref(), Some("zh"));
     assert_eq!(response.duration_secs, Some(1.25));
     assert_eq!(response.usage.unwrap().total_tokens, 8);
+}
+
+#[tokio::test]
+async fn openai_video_generation_returns_task_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/videos"))
+        .and(body_partial_json(serde_json::json!({
+            "model": "sora-2",
+            "prompt": "一只狐狸在雪地奔跑",
+            "seconds": "8",
+            "format": "mp4"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "video_123",
+            "object": "video",
+            "status": "queued"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::Compatible)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("sora-2")
+        .build()
+        .unwrap();
+
+    let response = client
+        .generate_video(crate::VideoGenRequest {
+            prompt: "一只狐狸在雪地奔跑".into(),
+            duration_secs: Some(8),
+            output_format: Some(crate::VideoFormat::Mp4),
+            extensions: Default::default(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.task_id, "video_123");
+    assert!(matches!(response.status, crate::TaskStatus::Pending));
+    assert!(response.url.is_none());
+}
+
+#[tokio::test]
+async fn openai_video_poll_maps_completed_task_to_content_url() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/videos/video_123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "video_123",
+            "object": "video",
+            "status": "completed"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("sora-2")
+        .build()
+        .unwrap();
+
+    let response = client.poll_video_task("video_123").await.unwrap();
+    let expected_url = format!("{}/videos/video_123/content", server.uri());
+
+    assert_eq!(response.task_id, "video_123");
+    assert!(matches!(response.status, crate::TaskStatus::Succeeded));
+    assert_eq!(response.url.as_deref(), Some(expected_url.as_str()));
+}
+
+#[tokio::test]
+async fn openai_video_download_stream_returns_bytes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/videos/video_123/content"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("content-type", "video/mp4")
+                .set_body_bytes(b"fake-video-data".to_vec()),
+        )
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("sora-2")
+        .build()
+        .unwrap();
+
+    let mut stream = client.download_video_stream("video_123").await.unwrap();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        bytes.extend_from_slice(chunk.unwrap().as_ref());
+    }
+
+    assert_eq!(bytes, b"fake-video-data");
+}
+
+#[tokio::test]
+async fn openai_video_download_to_file_creates_parent_dirs() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/videos/video_123/content"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("content-type", "video/mp4")
+                .set_body_bytes(b"fake-video-file".to_vec()),
+        )
+        .mount(&server)
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .base_url(server.uri())
+        .api_key("test-key")
+        .model("sora-2")
+        .build()
+        .unwrap();
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let output_path = std::env::temp_dir()
+        .join(format!("ufox-llm-video-test-{unique}"))
+        .join("nested")
+        .join("video.mp4");
+
+    client
+        .download_video_to_file("video_123", &output_path)
+        .await
+        .unwrap();
+
+    let bytes = tokio::fs::read(&output_path).await.unwrap();
+    assert_eq!(bytes, b"fake-video-file");
+
+    tokio::fs::remove_file(&output_path).await.unwrap();
+    tokio::fs::remove_dir_all(output_path.parent().unwrap().parent().unwrap())
+        .await
+        .unwrap();
 }

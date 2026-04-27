@@ -1,5 +1,13 @@
 #[derive(thiserror::Error, Debug)]
 pub enum LlmError {
+    /// 本地文件系统读写失败。
+    #[error("I/O 错误（{action}）：{source}")]
+    Io {
+        action: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("缺少必填配置项：{field}")]
     MissingConfig { field: &'static str },
 
@@ -61,6 +69,10 @@ pub enum LlmError {
 }
 
 impl LlmError {
+    pub(crate) fn io(action: &'static str, source: std::io::Error) -> Self {
+        Self::Io { action, source }
+    }
+
     pub(crate) fn request_timeout(
         stage: &'static str,
         timeout_ms: u64,

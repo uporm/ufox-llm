@@ -108,7 +108,7 @@ ufox-llm/
     ├── chat_basic.rs
     ├── streaming.rs
     ├── multimodal_image.rs
-    ├── embed_and_search.rs
+    ├── embed.rs
     ├── speech_to_text.rs
     ├── text_to_speech.rs
     ├── tool_calling.rs
@@ -1811,23 +1811,31 @@ CI 强制通过 `cargo clippy -- -D warnings`。
 
 ```rust
 // examples/chat_basic.rs
-use ufox_llm::{Client, Provider, ChatRequest};
+use ufox_llm::{ChatRequest, Client};
 
 #[tokio::main]
 async fn main() -> Result<(), ufox_llm::LlmError> {
-    let client = Client::builder()
-        .provider(Provider::OpenAI)
-        .api_key("sk-xxx")
-        .model("gpt-4o")
-        .build()?;
+    // 默认走环境变量，避免维护两份仅初始化方式不同的示例。
+    let client = Client::from_env()?;
 
-    let output = client.chat(
-        ChatRequest::builder()
-            .user_text("解释一下 Rust 的所有权模型")
-            .max_tokens(1024)
-            .build()
-    ).await?;
+    let output = client
+        .chat(
+            ChatRequest::builder()
+                .user_text("解释一下 Rust 的所有权模型")
+                .max_tokens(1024)
+                .thinking(true)
+                .build(),
+        )
+        .await?;
 
+    if let Some(thinking) = output.thinking.as_deref()
+        && !thinking.is_empty()
+    {
+        println!("=== 思考过程 ===\n");
+        println!("{thinking}\n");
+    }
+
+    println!("=== 最终回答 ===\n");
     println!("{}", output.text);
     Ok(())
 }
@@ -1868,6 +1876,47 @@ while let Some(chunk) = stream.next().await {
         eprint!("[thinking]{t}");
     }
     if chunk.is_finished() { break; }
+}
+```
+
+### 向量化
+
+```rust
+// examples/embed.rs
+use ufox_llm::{Client, EmbeddingRequest};
+
+const PREVIEW_DIMS: usize = 8;
+
+#[tokio::main]
+async fn main() -> Result<(), ufox_llm::LlmError> {
+    // 默认走环境变量，避免示例里硬编码密钥和模型配置。
+    let client = Client::from_env()?;
+    let inputs = vec![
+        "Rust trait object".to_string(),
+        "async stream".to_string(),
+    ];
+
+    let resp = client
+        .embed(EmbeddingRequest {
+            inputs: inputs.clone(),
+            dimensions: None,
+            extensions: Default::default(),
+        })
+        .await?;
+
+    println!("model: {}", resp.model);
+    println!("embeddings: {}", resp.embeddings.len());
+
+    for (index, embedding) in resp.embeddings.iter().enumerate() {
+        let input = inputs.get(index).map(String::as_str).unwrap_or("<unknown>");
+        let preview_len = embedding.len().min(PREVIEW_DIMS);
+        println!("--- embedding #{index} ---");
+        println!("input: {input}");
+        println!("dimensions: {}", embedding.len());
+        println!("first {preview_len} dims: {:?}", &embedding[..preview_len]);
+    }
+
+    Ok(())
 }
 ```
 

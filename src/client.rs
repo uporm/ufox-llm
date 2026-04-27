@@ -1,4 +1,7 @@
-use futures::Stream;
+use std::path::Path;
+
+use futures::{Stream, StreamExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     error::LlmError,
@@ -289,6 +292,52 @@ impl Client {
 
     pub async fn poll_video_task(&self, task_id: &str) -> Result<VideoGenResponse, LlmError> {
         self.adapter.poll_video_task(task_id).await
+    }
+
+    /// 以字节流形式下载已完成的视频内容。
+    ///
+    /// 调用方可在拿到 `TaskStatus::Succeeded` 后，用该接口将内容转发到 HTTP 响应、
+    /// 对象存储或自定义处理管线，避免一次性把整段视频读入内存。
+    pub async fn download_video_stream(
+        &self,
+        task_id: &str,
+    ) -> Result<impl Stream<Item = Result<bytes::Bytes, LlmError>> + Send, LlmError> {
+        self.adapter.download_video_stream(task_id).await
+    }
+
+    /// 下载已完成的视频并保存到本地文件。
+    ///
+    /// 若目标目录不存在，会自动创建父目录。
+    ///
+    /// # Errors
+    /// 当 provider 不支持视频下载、远端下载失败或本地文件写入失败时返回错误。
+    pub async fn download_video_to_file(
+        &self,
+        task_id: &str,
+        path: impl AsRef<Path>,
+    ) -> Result<(), LlmError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|err| LlmError::io("创建视频输出目录", err))?;
+        }
+
+        let mut stream = self.download_video_stream(task_id).await?;
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .map_err(|err| LlmError::io("创建视频输出文件", err))?;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|err| LlmError::io("写入视频输出文件", err))?;
+        }
+        file.flush()
+            .await
+            .map_err(|err| LlmError::io("刷新视频输出文件", err))?;
+        Ok(())
     }
 
     pub fn provider(&self) -> &Provider {

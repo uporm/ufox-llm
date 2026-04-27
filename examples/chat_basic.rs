@@ -16,6 +16,7 @@ async fn main() -> Result<(), ufox_llm::LlmError> {
             ChatRequest::builder()
                 .user_text("解释一下 Rust 的所有权模型")
                 .max_tokens(1024)
+                .thinking(true)
                 .build(),
         )
         .await?;

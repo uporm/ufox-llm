@@ -61,8 +61,8 @@ impl Default for ChatRequest {
             top_p: None,
             tools: Vec::new(),
             tool_choice: Default::default(),
-            // 默认开启 thinking，避免调用方遗漏该能力。
-            thinking: true,
+            // 默认关闭 thinking，避免不同兼容后端对字段形态要求不一致时直接失败。
+            thinking: false,
             thinking_budget: None,
             reasoning_effort: None,
             parallel_tool_calls: None,
@@ -318,10 +318,10 @@ mod tests {
     }
 
     #[test]
-    fn chat_request_defaults_to_thinking_enabled() {
+    fn chat_request_defaults_to_thinking_disabled() {
         let request = ChatRequest::default();
 
-        assert!(request.thinking);
+        assert!(!request.thinking);
         assert_eq!(request.thinking_budget, None);
         assert_eq!(request.reasoning_effort, None);
     }

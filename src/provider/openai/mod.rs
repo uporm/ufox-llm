@@ -16,6 +16,7 @@
 //! | `audio` | 语音识别与语音合成（两套协议共用） |
 //! | `embedding` | 文本向量化（两套协议共用） |
 //! | `image` | 图片生成（两套协议共用） |
+//! | `video` | 视频生成（两套协议共用） |
 
 mod audio;
 mod chat_completions;
@@ -24,6 +25,7 @@ mod http;
 mod image;
 mod media;
 mod responses;
+mod video;
 
 #[cfg(test)]
 mod tests;
@@ -41,6 +43,7 @@ use crate::{
     error::LlmError,
     middleware::Transport,
     provider::ApiProtocol,
+    types::request::ChatRequest,
     types::content::Role,
     types::response::ChatChunk,
 };
@@ -65,6 +68,24 @@ fn unsupported_multimodal_error(http_context: &HttpContext, role: Role) -> LlmEr
         }
         .into(),
     }
+}
+
+/// 规整 OpenAI 兼容协议的聊天请求。
+///
+/// OpenAI 与兼容 provider 当前不支持项目内定义的 `thinking` 请求语义，
+/// 因此这里统一忽略相关字段，避免把不稳定字段透传给后端。
+pub(super) fn normalize_chat_request(provider_name: &'static str, mut req: ChatRequest) -> ChatRequest {
+    if req.thinking || req.thinking_budget.is_some() {
+        tracing::warn!(
+            provider = provider_name,
+            thinking_enabled = req.thinking,
+            thinking_budget = req.thinking_budget,
+            "当前 provider 不支持 thinking 请求参数，已忽略"
+        );
+        req.thinking = false;
+        req.thinking_budget = None;
+    }
+    req
 }
 
 /// 构造 OpenAI 兼容 provider adapter。

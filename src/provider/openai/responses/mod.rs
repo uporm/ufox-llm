@@ -35,6 +35,7 @@ use super::{
     http::{HttpContext, OpenAiRequestBuilder, parse_usage, send_json_request},
     image,
     media::resolve_media_source_to_image_url,
+    normalize_chat_request,
     unsupported_multimodal_error,
 };
 use crate::provider::ProviderAdapter;
@@ -628,6 +629,7 @@ impl ProviderAdapter for ResponsesAdapter {
     }
 
     async fn chat(&self, model: &str, req: ChatRequest) -> Result<ChatResponse, LlmError> {
+        let req = normalize_chat_request(self.http_context.provider_name(), req);
         self.execute_chat(model, req).await
     }
 
@@ -636,6 +638,7 @@ impl ProviderAdapter for ResponsesAdapter {
         model: &str,
         req: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk, LlmError>> + Send>>, LlmError> {
+        let req = normalize_chat_request(self.http_context.provider_name(), req);
         self.execute_chat_stream(model, req).await
     }
 
@@ -676,7 +679,18 @@ impl ProviderAdapter for ResponsesAdapter {
         model: &str,
         req: crate::types::request::VideoGenRequest,
     ) -> Result<VideoGenResponse, LlmError> {
-        image::execute_generate_video(self, model, req).await
+        super::video::execute_generate_video(self, model, req).await
+    }
+
+    async fn poll_video_task(&self, task_id: &str) -> Result<VideoGenResponse, LlmError> {
+        super::video::execute_poll_video_task(self, task_id).await
+    }
+
+    async fn download_video_stream(
+        &self,
+        task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, LlmError>> + Send>>, LlmError> {
+        super::video::execute_download_video_stream(self, task_id).await
     }
 }
 

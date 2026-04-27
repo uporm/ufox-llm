@@ -6,6 +6,7 @@ mod qwen;
 
 use std::pin::Pin;
 
+use bytes::Bytes;
 use async_trait::async_trait;
 use futures::Stream;
 
@@ -108,6 +109,16 @@ pub(crate) trait ProviderAdapter: Send + Sync {
         Err(LlmError::UnsupportedCapability {
             provider: Some(self.name().into()),
             capability: "poll_video_task".into(),
+        })
+    }
+
+    async fn download_video_stream(
+        &self,
+        _task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, LlmError>> + Send>>, LlmError> {
+        Err(LlmError::UnsupportedCapability {
+            provider: Some(self.name().into()),
+            capability: "download_video_stream".into(),
         })
     }
 }

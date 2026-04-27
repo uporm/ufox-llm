@@ -1,8 +1,8 @@
 use crate::{
     error::LlmError,
     types::{
-        request::{ImageGenRequest, VideoGenRequest},
-        response::{ImageGenResponse, VideoGenResponse},
+        request::ImageGenRequest,
+        response::ImageGenResponse,
     },
 };
 
@@ -64,14 +64,3 @@ pub(super) async fn execute_generate_image<A: OpenAiRequestBuilder>(
     })
 }
 
-pub(super) async fn execute_generate_video<A: OpenAiRequestBuilder>(
-    adapter: &A,
-    _model: &str,
-    _req: VideoGenRequest,
-) -> Result<VideoGenResponse, LlmError> {
-    // TODO(video): Sora 等视频生成 API 尚未稳定公开，待可用后实现
-    Err(LlmError::UnsupportedCapability {
-        provider: Some(adapter.provider_name().into()),
-        capability: "generate_video".into(),
-    })
-}
