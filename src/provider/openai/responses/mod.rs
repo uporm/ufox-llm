@@ -21,7 +21,7 @@ use futures::Stream;
 use crate::{
     error::LlmError,
     types::{
-        content::{ContentPart, Message, Role, Tool, ToolCall, ToolChoice, ToolResultPayload},
+        content::{ContentPart, Message, Role, ToolCall, ToolChoice, ToolResultPayload},
         request::ChatRequest,
         response::{
             ChatChunk, ChatResponse, EmbeddingResponse, FinishReason, ImageGenResponse,
@@ -31,10 +31,11 @@ use crate::{
 };
 
 use super::{
-    RESPONSES_PATH,
-    audio, embedding, image,
+    RESPONSES_PATH, audio, embedding,
     http::{HttpContext, OpenAiRequestBuilder, parse_usage, send_json_request},
+    image,
     media::resolve_media_source_to_image_url,
+    unsupported_multimodal_error,
 };
 use crate::provider::ProviderAdapter;
 
@@ -63,19 +64,6 @@ impl OpenAiRequestBuilder for ResponsesAdapter {
 // ── 消息转换 ──────────────────────────────────────────────────────────────────
 
 impl ResponsesAdapter {
-    fn unsupported_multimodal_error(&self, role: Role) -> LlmError {
-        LlmError::UnsupportedCapability {
-            provider: Some(self.http_context.provider_name().into()),
-            capability: match role {
-                Role::User => "user_multimodal_content",
-                Role::System => "system_multimodal_content",
-                Role::Assistant => "assistant_multimodal_content",
-                Role::Tool => "tool_multimodal_content",
-            }
-            .into(),
-        }
-    }
-
     /// 将 `user` / `system` role 消息转换为 Responses API `input_text` / `input_image` 内容项。
     async fn build_user_or_system_input_item(
         &self,
@@ -89,14 +77,18 @@ impl ResponsesAdapter {
                     "text": value.text,
                 })),
                 ContentPart::Image(image) => {
-                    let image_url =
-                        resolve_media_source_to_image_url(&image.source).await?;
+                    let image_url = resolve_media_source_to_image_url(&image.source).await?;
                     parts.push(serde_json::json!({
                         "type": "input_image",
                         "image_url": image_url,
                     }));
                 }
-                _ => return Err(self.unsupported_multimodal_error(message.role)),
+                _ => {
+                    return Err(unsupported_multimodal_error(
+                        &self.http_context,
+                        message.role,
+                    ));
+                }
             }
         }
 
@@ -172,7 +164,12 @@ impl ResponsesAdapter {
                         "arguments": call.arguments.to_string(),
                     }));
                 }
-                _ => return Err(self.unsupported_multimodal_error(message.role)),
+                _ => {
+                    return Err(unsupported_multimodal_error(
+                        &self.http_context,
+                        message.role,
+                    ));
+                }
             }
         }
         flush_text(&mut out, &mut text);
@@ -195,21 +192,6 @@ impl ResponsesAdapter {
             }
         }
         Ok(out)
-    }
-
-    /// 将 tools 列表转换为 Responses API `tools` 数组。
-    fn build_tools_payload(tools: &[Tool]) -> Vec<serde_json::Value> {
-        tools
-            .iter()
-            .map(|tool| {
-                serde_json::json!({
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.input_schema,
-                })
-            })
-            .collect()
     }
 
     /// 将 [`ToolChoice`] 转换为 Responses API `tool_choice` 值。
@@ -274,7 +256,18 @@ impl ResponsesAdapter {
         if !req.tools.is_empty() {
             body.insert(
                 "tools".into(),
-                Self::build_tools_payload(&req.tools).into(),
+                req.tools
+                    .iter()
+                    .map(|tool| {
+                        serde_json::json!({
+                            "type": "function",
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.input_schema,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
             );
             body.insert(
                 "tool_choice".into(),
@@ -307,17 +300,17 @@ impl ResponsesAdapter {
         }
 
         match raw.get("status").and_then(|value| value.as_str()) {
-            Some("completed") => Some(FinishReason::Stop),
+            Some("completed") => Some(FinishReason::Completed),
             Some("incomplete") => match raw
                 .get("incomplete_details")
                 .and_then(|value| value.get("reason"))
                 .and_then(|value| value.as_str())
             {
-                Some("max_output_tokens") | Some("max_tokens") => Some(FinishReason::Length),
+                Some("max_output_tokens") | Some("max_tokens") | Some("length") => Some(FinishReason::MaxOutputTokens),
                 Some("content_filter") => Some(FinishReason::ContentFilter),
-                Some(_) | None => Some(FinishReason::Other),
+                Some(_) | None => Some(FinishReason::Failed),
             },
-            Some("failed") | Some(_) => Some(FinishReason::Other),
+            Some("failed") | Some(_) => Some(FinishReason::Failed),
             None => None,
         }
     }
@@ -546,13 +539,13 @@ impl ResponsesAdapter {
                 }
             }
             "response.completed" | "response.incomplete" => {
-                let response = raw
-                    .get("response")
-                    .cloned()
-                    .ok_or_else(|| LlmError::StreamProtocol {
-                        provider: provider_name.to_owned(),
-                        message: format!("{event_type} 缺少 response"),
-                    })?;
+                let response =
+                    raw.get("response")
+                        .cloned()
+                        .ok_or_else(|| LlmError::StreamProtocol {
+                            provider: provider_name.to_owned(),
+                            message: format!("{event_type} 缺少 response"),
+                        })?;
                 let parsed = Self::parse_response_with_provider(
                     provider_name,
                     response.clone(),
@@ -569,9 +562,7 @@ impl ResponsesAdapter {
                     chunk.text_delta = Some(parsed.text);
                     *saw_text_delta = true;
                 }
-                if !*saw_thinking_delta
-                    && let Some(thinking) = parsed.thinking
-                {
+                if !*saw_thinking_delta && let Some(thinking) = parsed.thinking {
                     chunk.thinking_delta = Some(thinking);
                     *saw_thinking_delta = true;
                 }
@@ -612,18 +603,10 @@ impl ResponsesAdapter {
         let request_started_at = std::time::Instant::now();
         let message_count = req.messages.len();
         let tool_count = req.tools.len();
-        tracing::info!(
-            provider = self.http_context.provider_name(),
-            model,
-            message_count,
-            tool_count,
-            stream = false,
-            "开始执行 responses"
-        );
         let body = self.build_request_body(model, &req, false).await?;
         let raw = send_json_request(self, self.post_json(RESPONSES_PATH).json(&body)).await?;
         let parsed = self.parse_response(raw.clone(), Some(raw))?;
-        tracing::info!(
+        tracing::debug!(
             provider = self.http_context.provider_name(),
             model,
             message_count,
@@ -855,6 +838,6 @@ mod tests {
         assert_eq!(chunks[0].text_delta.as_deref(), Some("你好"));
         assert_eq!(chunks[0].thinking_delta.as_deref(), Some("先打招呼。"));
         assert_eq!(chunks[0].usage.as_ref().unwrap().total_tokens, 8);
-        assert!(matches!(chunks[0].finish_reason, Some(FinishReason::Stop)));
+        assert!(matches!(chunks[0].finish_reason, Some(FinishReason::Completed)));
     }
 }

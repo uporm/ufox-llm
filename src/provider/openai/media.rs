@@ -78,6 +78,8 @@ pub(super) async fn resolve_media_source_bytes(
     fallback_filename: &str,
     default_mime: Option<&str>,
 ) -> Result<(Vec<u8>, String, String), LlmError> {
+    // TODO(memory): 当前将完整媒体文件读入内存，适用于语音转文字等较小文件（OpenAI 限制 25MB）。
+    // 若未来支持超大文件，需改为流式读取，并留意目标 API 是否支持 Chunked Multipart Part（部分 API 强制要求 Content-Length）。
     match source {
         MediaSource::Base64 { data, mime_type } => {
             let bytes = base64::engine::general_purpose::STANDARD

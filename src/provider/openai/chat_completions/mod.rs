@@ -21,23 +21,23 @@ use futures::Stream;
 use crate::{
     error::LlmError,
     types::{
-        content::{ContentPart, Message, Role, Tool, ToolCall, ToolChoice, ToolResultPayload},
+        content::{ContentPart, Message, Role, ToolCall, ToolChoice, ToolResultPayload},
         request::ChatRequest,
         response::{
-            ChatChunk, ChatResponse, EmbeddingResponse, ImageGenResponse,
-            SpeechToTextResponse, TextToSpeechResponse, VideoGenResponse,
+            ChatChunk, ChatResponse, EmbeddingResponse, ImageGenResponse, SpeechToTextResponse,
+            TextToSpeechResponse, VideoGenResponse,
         },
     },
 };
 
 use super::{
-    CHAT_COMPLETIONS_PATH,
-    audio, embedding, image,
+    CHAT_COMPLETIONS_PATH, audio, embedding,
     http::{
-        HttpContext, OpenAiRequestBuilder, parse_finish_reason, parse_usage,
-        send_json_request,
+        HttpContext, OpenAiRequestBuilder, parse_finish_reason, parse_usage, send_json_request,
     },
+    image,
     media::resolve_media_source_to_image_url,
+    unsupported_multimodal_error,
 };
 use crate::provider::ProviderAdapter;
 
@@ -66,19 +66,6 @@ impl OpenAiRequestBuilder for ChatCompletionsAdapter {
 // ── 消息转换 ──────────────────────────────────────────────────────────────────
 
 impl ChatCompletionsAdapter {
-    pub(super) fn unsupported_multimodal_error(&self, role: Role) -> LlmError {
-        LlmError::UnsupportedCapability {
-            provider: Some(self.http_context.provider_name().into()),
-            capability: match role {
-                Role::User => "user_multimodal_content",
-                Role::System => "system_multimodal_content",
-                Role::Assistant => "assistant_multimodal_content",
-                Role::Tool => "tool_multimodal_content",
-            }
-            .into(),
-        }
-    }
-
     /// 将 `tool` role 消息转换为一组 `{ role: "tool", tool_call_id, content }` 对象。
     fn to_tool_role_messages(&self, message: &Message) -> Result<Vec<serde_json::Value>, LlmError> {
         let mut out = Vec::with_capacity(message.content.len());
@@ -119,7 +106,12 @@ impl ChatCompletionsAdapter {
                         }
                     }));
                 }
-                _ => return Err(self.unsupported_multimodal_error(message.role)),
+                _ => {
+                    return Err(unsupported_multimodal_error(
+                        &self.http_context,
+                        message.role,
+                    ));
+                }
             }
         }
 
@@ -148,14 +140,18 @@ impl ChatCompletionsAdapter {
                     "text": value.text,
                 })),
                 ContentPart::Image(image) => {
-                    let image_url =
-                        resolve_media_source_to_image_url(&image.source).await?;
+                    let image_url = resolve_media_source_to_image_url(&image.source).await?;
                     parts.push(serde_json::json!({
                         "type": "image_url",
                         "image_url": image_url,
                     }));
                 }
-                _ => return Err(self.unsupported_multimodal_error(message.role)),
+                _ => {
+                    return Err(unsupported_multimodal_error(
+                        &self.http_context,
+                        message.role,
+                    ));
+                }
             }
         }
 
@@ -190,23 +186,6 @@ impl ChatCompletionsAdapter {
             }
         }
         Ok(out)
-    }
-
-    /// 将 tools 列表转换为 Chat Completions `tools` 数组。
-    pub(super) fn build_tools_payload(tools: &[Tool]) -> Vec<serde_json::Value> {
-        tools
-            .iter()
-            .map(|tool| {
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.input_schema,
-                    }
-                })
-            })
-            .collect()
     }
 
     /// 将 [`ToolChoice`] 转换为 Chat Completions `tool_choice` 值。
@@ -259,7 +238,23 @@ impl ChatCompletionsAdapter {
             body.insert("reasoning_effort".into(), reasoning_effort.as_str().into());
         }
         if !req.tools.is_empty() {
-            body.insert("tools".into(), Self::build_tools_payload(&req.tools).into());
+            body.insert(
+                "tools".into(),
+                req.tools
+                    .iter()
+                    .map(|tool| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": tool.name,
+                                "description": tool.description,
+                                "parameters": tool.input_schema,
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            );
             body.insert(
                 "tool_choice".into(),
                 Self::build_tool_choice_payload(&req.tool_choice),
@@ -365,12 +360,11 @@ impl ChatCompletionsAdapter {
                                 });
                             }
                         };
-                        let arguments =
-                            serde_json::from_str(arguments_raw).map_err(|err| {
-                                LlmError::ToolProtocol {
-                                    message: format!("tool arguments 解析失败: {err}"),
-                                }
-                            })?;
+                        let arguments = serde_json::from_str(arguments_raw).map_err(|err| {
+                            LlmError::ToolProtocol {
+                                message: format!("tool arguments 解析失败: {err}"),
+                            }
+                        })?;
 
                         Ok(ToolCall {
                             id: id.to_owned(),
@@ -423,22 +417,11 @@ impl ChatCompletionsAdapter {
         let request_started_at = std::time::Instant::now();
         let message_count = req.messages.len();
         let tool_count = req.tools.len();
-        tracing::info!(
-            provider = self.http_context.provider_name(),
-            model,
-            message_count,
-            tool_count,
-            stream = false,
-            "开始执行 chat"
-        );
         let body = self.to_request_body(model, &req, false).await?;
-        let raw = send_json_request(
-            self,
-            self.post_json(CHAT_COMPLETIONS_PATH).json(&body),
-        )
-        .await?;
+        let raw =
+            send_json_request(self, self.post_json(CHAT_COMPLETIONS_PATH).json(&body)).await?;
         let parsed = self.parse_response(raw.clone(), Some(raw))?;
-        tracing::info!(
+        tracing::debug!(
             provider = self.http_context.provider_name(),
             model,
             message_count,
@@ -526,9 +509,9 @@ mod tests {
         },
     };
 
-    use crate::types::response::FinishReason;
-    use super::*;
     use super::stream::PartialToolCall;
+    use super::*;
+    use crate::types::response::FinishReason;
 
     fn test_adapter() -> ChatCompletionsAdapter {
         ChatCompletionsAdapter::new(HttpContext::new(
@@ -686,7 +669,7 @@ mod tests {
                     "id": "chatcmpl_123",
                     "model": "gpt-4o-mini",
                     "choices": [{
-                        "finish_reason": "stop"
+                        "finish_reason": "completed"
                     }]
                 }),
                 None,
@@ -714,7 +697,7 @@ mod tests {
                                 "image_url": { "url": "https://example.com/image.png" }
                             }]
                         },
-                        "finish_reason": "stop"
+                        "finish_reason": "completed"
                     }]
                 }),
                 None,
@@ -849,7 +832,7 @@ mod tests {
                             "reasoning_content": "先分析一下问题。",
                             "content": "答案是 42。"
                         },
-                        "finish_reason": "stop"
+                        "finish_reason": "completed"
                     }]
                 }),
                 None,
@@ -874,7 +857,7 @@ mod tests {
                             "reasoning": "思考过程在此。",
                             "content": "最终回答。"
                         },
-                        "finish_reason": "stop"
+                        "finish_reason": "completed"
                     }]
                 }),
                 None,

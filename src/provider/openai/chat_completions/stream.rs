@@ -23,13 +23,16 @@ use crate::{
     types::{
         content::ToolCall,
         request::ChatRequest,
-        response::{ChatChunk, FinishReason},
+        response::{ChatChunk, FinishReason, Usage},
     },
 };
 
 use super::super::{
     CHAT_COMPLETIONS_PATH, ChatChunkStream,
-    http::{OpenAiRequestBuilder, map_stream_read_error, parse_finish_reason, parse_sse_data, parse_usage, send_request, take_sse_event},
+    http::{
+        OpenAiRequestBuilder, map_stream_read_error, parse_finish_reason, parse_sse_data,
+        parse_usage, send_request, take_sse_event,
+    },
 };
 use super::ChatCompletionsAdapter;
 
@@ -96,8 +99,7 @@ impl PartialToolCall {
 /// - `first_chunk_logged` — 首个 chunk 延迟是否已记录
 /// - `done` — 是否已收到 `[DONE]` 或遇到不可恢复错误
 pub(super) struct StreamState {
-    pub(super) source:
-        Pin<Box<dyn Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>,
+    pub(super) source: Pin<Box<dyn Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>,
     pub(super) buffer: Vec<u8>,
     pub(super) pending: VecDeque<Result<ChatChunk, LlmError>>,
     pub(super) tool_calls: BTreeMap<usize, PartialToolCall>,
@@ -106,9 +108,75 @@ pub(super) struct StreamState {
     pub(super) done: bool,
 }
 
-// ── impl ChatCompletionsAdapter（流式方法）───────────────────────────────────
+impl StreamState {
+    /// 取出下一个待产出的 chunk，并在首次成功产出时记录状态。
+    pub(super) fn pop_pending(&mut self) -> Option<Result<ChatChunk, LlmError>> {
+        let item = self.pending.pop_front()?;
+        if item.is_ok() {
+            self.first_chunk_logged = true;
+        }
+        Some(item)
+    }
 
+    /// 将流标记为结束。
+    pub(super) fn finish(&mut self) {
+        self.done = true;
+    }
+
+    /// 将最终化后的 tool calls 追加到待产出队列。
+    pub(super) fn enqueue_tool_calls(&mut self, tool_calls: Vec<ToolCall>) {
+        if tool_calls.is_empty() {
+            return;
+        }
+
+        self.pending.push_back(Ok(ChatChunk {
+            tool_calls,
+            ..ChatChunk::default()
+        }));
+    }
+}
+
+// ── impl ChatCompletionsAdapter（流式方法）───────────────────────────────────
 impl ChatCompletionsAdapter {
+    /// 构造仅包含思考增量的 chunk。
+    fn thinking_chunk(thinking: &str) -> ChatChunk {
+        ChatChunk {
+            thinking_delta: Some(thinking.to_owned()),
+            ..ChatChunk::default()
+        }
+    }
+
+    /// 构造仅包含文本增量的 chunk。
+    fn text_chunk(content: &str) -> ChatChunk {
+        ChatChunk {
+            text_delta: Some(content.to_owned()),
+            ..ChatChunk::default()
+        }
+    }
+
+    /// 构造包含 tool calls 的 chunk，并可附加结束元数据。
+    fn tool_calls_chunk(
+        tool_calls: Vec<ToolCall>,
+        finish_reason: Option<FinishReason>,
+        usage: Option<Usage>,
+    ) -> ChatChunk {
+        ChatChunk {
+            tool_calls,
+            finish_reason,
+            usage,
+            ..ChatChunk::default()
+        }
+    }
+
+    /// 构造仅包含结束元数据的 chunk。
+    fn terminal_chunk(finish_reason: Option<FinishReason>, usage: Option<Usage>) -> ChatChunk {
+        ChatChunk {
+            finish_reason,
+            usage,
+            ..ChatChunk::default()
+        }
+    }
+
     /// 将 `partials` 中所有 [`PartialToolCall`] 最终化并清空。
     pub(super) fn drain_partial_tool_calls(
         partials: &mut BTreeMap<usize, PartialToolCall>,
@@ -118,6 +186,135 @@ impl ChatCompletionsAdapter {
             calls.push(partial.finalize()?);
         }
         Ok(calls)
+    }
+
+    /// 将单个 `tool_call` delta 合并到对应的 partial。
+    fn merge_tool_call_delta(
+        item: &serde_json::Value,
+        partials: &mut BTreeMap<usize, PartialToolCall>,
+    ) -> Result<(), LlmError> {
+        let index =
+            item.get("index")
+                .and_then(|value| value.as_u64())
+                .ok_or_else(|| LlmError::ToolProtocol {
+                    message: "stream tool call 缺少 index".into(),
+                })? as usize;
+        let entry = partials.entry(index).or_default();
+
+        if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
+            entry.id = Some(id.to_owned());
+        }
+
+        let Some(function) = item.get("function").and_then(|value| value.as_object()) else {
+            return Ok(());
+        };
+
+        if let Some(name) = function.get("name").and_then(|value| value.as_str()) {
+            match &mut entry.tool_name {
+                Some(existing) => existing.push_str(name),
+                None => entry.tool_name = Some(name.to_owned()),
+            }
+        }
+
+        if let Some(arguments) = function.get("arguments") {
+            let arguments = arguments
+                .as_str()
+                .ok_or_else(|| LlmError::ToolProtocol {
+                    message: "stream tool call arguments 不是字符串".into(),
+                })?;
+            entry.arguments_seen = true;
+            entry.arguments.push_str(arguments);
+        }
+
+        Ok(())
+    }
+
+    /// 将结束原因和 usage 尽量附着到最后一个 chunk，避免额外生成空 chunk。
+    fn attach_terminal_metadata(
+        chunks: &mut Vec<ChatChunk>,
+        finish_reason: Option<FinishReason>,
+        usage: Option<Usage>,
+    ) {
+        if finish_reason.is_none() && usage.is_none() {
+            return;
+        }
+
+        if let Some(last) = chunks.last_mut()
+            && last.finish_reason.is_none()
+            && last.usage.is_none()
+        {
+            last.finish_reason = finish_reason;
+            last.usage = usage;
+            return;
+        }
+
+        chunks.push(Self::terminal_chunk(finish_reason, usage));
+    }
+
+    /// 将尚未完成的 partial tool calls 最终化。
+    fn finalize_pending_tool_calls(
+        partials: &mut BTreeMap<usize, PartialToolCall>,
+    ) -> Result<Option<Vec<ToolCall>>, LlmError> {
+        let tool_calls = Self::drain_partial_tool_calls(partials)?;
+        if tool_calls.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(tool_calls))
+    }
+
+    /// 处理单条 `data:` 负载，并将解析出的 chunk 追加到 `state.pending`。
+    fn handle_stream_data(
+        provider_name: &str,
+        data: &str,
+        state: &mut StreamState,
+    ) -> Result<(), LlmError> {
+        if data == "[DONE]" {
+            state.finish();
+            if let Some(tool_calls) = Self::finalize_pending_tool_calls(&mut state.tool_calls)? {
+                state.enqueue_tool_calls(tool_calls);
+            }
+            return Ok(());
+        }
+
+        let raw = serde_json::from_str::<serde_json::Value>(data).map_err(|err| {
+            LlmError::StreamProtocol {
+                provider: provider_name.to_owned(),
+                message: format!("stream json 解析失败: {err}"),
+            }
+        })?;
+
+        let chunks = Self::parse_stream_event(provider_name, &raw, &mut state.tool_calls)?;
+        state.pending.extend(chunks.into_iter().map(Ok));
+        Ok(())
+    }
+
+    /// 扫描缓冲区中已完整到达的 SSE 事件。
+    ///
+    /// 返回 `true` 表示流已经结束或遇到错误，外层应停止继续消费本批字节。
+    fn process_buffered_events(provider_name: &str, state: &mut StreamState) -> bool {
+        while let Some(event) = take_sse_event(&mut state.buffer) {
+            match parse_sse_data(&event, provider_name) {
+                Ok(Some(data)) => {
+                    if let Err(err) = Self::handle_stream_data(provider_name, &data, state) {
+                        state.finish();
+                        state.pending.push_back(Err(err));
+                        return true;
+                    }
+                    if state.done {
+                        return true;
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    state.finish();
+                    state.pending.push_back(Err(err));
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// 解析单个 SSE JSON 事件，返回零个或多个 [`ChatChunk`]。
@@ -156,96 +353,38 @@ impl ChatCompletionsAdapter {
             .and_then(|value| value.as_str())
             .filter(|s| !s.is_empty())
         {
-            chunks.push(ChatChunk {
-                thinking_delta: Some(thinking.to_owned()),
-                ..ChatChunk::default()
-            });
+            chunks.push(Self::thinking_chunk(thinking));
         }
 
-        // 文本片段
         if let Some(content) = delta
             .and_then(|value| value.get("content"))
             .and_then(|value| value.as_str())
             .filter(|content| !content.is_empty())
         {
-            chunks.push(ChatChunk {
-                text_delta: Some(content.to_owned()),
-                ..ChatChunk::default()
-            });
+            chunks.push(Self::text_chunk(content));
         }
 
-        // tool call 片段：按 index 累积到 partials，不立即 yield
         if let Some(items) = delta
             .and_then(|value| value.get("tool_calls"))
             .and_then(|value| value.as_array())
         {
             for item in items {
-                let index = item
-                    .get("index")
-                    .and_then(|value| value.as_u64())
-                    .ok_or_else(|| LlmError::ToolProtocol {
-                        message: "stream tool call 缺少 index".into(),
-                    })? as usize;
-                let entry = partials.entry(index).or_default();
-                if let Some(id) = item.get("id").and_then(|value| value.as_str()) {
-                    entry.id = Some(id.to_owned());
-                }
-                if let Some(function) =
-                    item.get("function").and_then(|value| value.as_object())
-                {
-                    if let Some(name) = function.get("name").and_then(|value| value.as_str()) {
-                        match &mut entry.tool_name {
-                            Some(existing) => existing.push_str(name),
-                            None => entry.tool_name = Some(name.to_owned()),
-                        }
-                    }
-                    if let Some(arguments) = function.get("arguments") {
-                        let arguments =
-                            arguments.as_str().ok_or_else(|| LlmError::ToolProtocol {
-                                message: "stream tool call arguments 不是字符串".into(),
-                            })?;
-                        entry.arguments_seen = true;
-                        entry.arguments.push_str(arguments);
-                    }
-                }
+                Self::merge_tool_call_delta(item, partials)?;
             }
         }
 
-        let finish_reason = parse_finish_reason(
-            choice
-                .get("finish_reason")
-                .and_then(|value| value.as_str()),
-        );
+        let finish_reason =
+            parse_finish_reason(choice.get("finish_reason").and_then(|value| value.as_str()));
         let usage = parse_usage(raw.get("usage"));
 
         if matches!(finish_reason, Some(FinishReason::ToolCalls)) {
-            // tool_calls 结束：立即最终化所有 partials
-            chunks.push(ChatChunk {
-                tool_calls: Self::drain_partial_tool_calls(partials)?,
+            chunks.push(Self::tool_calls_chunk(
+                Self::drain_partial_tool_calls(partials)?,
                 finish_reason,
                 usage,
-                ..ChatChunk::default()
-            });
-        } else if finish_reason.is_some() || usage.is_some() {
-            // 其他结束原因：尽量附加到已有 chunk，否则生成空 chunk
-            if let Some(last) = chunks.last_mut() {
-                if last.finish_reason.is_none() && last.usage.is_none() {
-                    last.finish_reason = finish_reason;
-                    last.usage = usage;
-                } else {
-                    chunks.push(ChatChunk {
-                        finish_reason,
-                        usage,
-                        ..ChatChunk::default()
-                    });
-                }
-            } else {
-                chunks.push(ChatChunk {
-                    finish_reason,
-                    usage,
-                    ..ChatChunk::default()
-                });
-            }
+            ));
+        } else {
+            Self::attach_terminal_metadata(&mut chunks, finish_reason, usage);
         }
 
         Ok(chunks)
@@ -262,26 +401,13 @@ impl ChatCompletionsAdapter {
         req: ChatRequest,
     ) -> Result<ChatChunkStream, LlmError> {
         let request_started_at = std::time::Instant::now();
-        let message_count = req.messages.len();
-        let tool_count = req.tools.len();
-        tracing::info!(
-            provider = self.http_context.provider_name(),
-            model,
-            message_count,
-            tool_count,
-            stream = true,
-            "开始建立 chat_stream"
-        );
         let body = self.to_request_body(model, &req, true).await?;
-        let response = send_request(
-            self,
-            self.post_json(CHAT_COMPLETIONS_PATH).json(&body),
-        )
-        .await?;
+        let response =
+            send_request(self, self.post_json(CHAT_COMPLETIONS_PATH).json(&body)).await?;
 
         let provider_name = self.http_context.provider_name();
         let read_timeout_ms = self.http_context.transport().read_timeout_ms();
-        tracing::info!(
+        tracing::debug!(
             provider = provider_name,
             model,
             elapsed_ms = request_started_at.elapsed().as_millis() as u64,
@@ -300,26 +426,11 @@ impl ChatCompletionsAdapter {
             },
             move |mut state| async move {
                 loop {
-                    // 优先消费已解析的 chunk
-                    if let Some(item) = state.pending.pop_front() {
-                        if let Ok(chunk) = &item
-                            && !state.first_chunk_logged
-                        {
-                            state.first_chunk_logged = true;
-                            tracing::info!(
-                                provider = provider_name,
-                                first_chunk_latency_ms =
-                                    state.started_at.elapsed().as_millis() as u64,
-                                has_text = chunk.text_delta.is_some(),
-                                tool_call_count = chunk.tool_calls.len(),
-                                finish_reason = ?chunk.finish_reason,
-                                "chat_stream 收到首个 chunk"
-                            );
-                        }
+                    if let Some(item) = state.pop_pending() {
                         return Some((item, state));
                     }
                     if state.done {
-                        tracing::info!(
+                        tracing::debug!(
                             provider = provider_name,
                             total_elapsed_ms = state.started_at.elapsed().as_millis() as u64,
                             saw_first_chunk = state.first_chunk_logged,
@@ -328,96 +439,22 @@ impl ChatCompletionsAdapter {
                         return None;
                     }
 
-                    // 读取下一批字节
                     match state.source.next().await {
                         Some(Ok(bytes)) => {
                             state.buffer.extend_from_slice(&bytes);
-                            // 尽可能多地分割出完整 SSE 帧
-                            while let Some(event) = take_sse_event(&mut state.buffer) {
-                                match parse_sse_data(&event, provider_name) {
-                                    Ok(Some(data)) if data == "[DONE]" => {
-                                        state.done = true;
-                                        // 流结束时检查是否有未 yield 的 tool calls
-                                        match ChatCompletionsAdapter::drain_partial_tool_calls(
-                                            &mut state.tool_calls,
-                                        ) {
-                                            Ok(tool_calls) if !tool_calls.is_empty() => {
-                                                state.pending.push_back(Ok(ChatChunk {
-                                                    tool_calls,
-                                                    ..ChatChunk::default()
-                                                }));
-                                            }
-                                            Ok(_) => {}
-                                            Err(err) => state.pending.push_back(Err(err)),
-                                        }
-                                        break;
-                                    }
-                                    Ok(Some(data)) => {
-                                        match serde_json::from_str::<serde_json::Value>(&data) {
-                                            Ok(raw) => {
-                                                match ChatCompletionsAdapter::parse_stream_event(
-                                                    provider_name,
-                                                    &raw,
-                                                    &mut state.tool_calls,
-                                                ) {
-                                                    Ok(chunks) => {
-                                                        state
-                                                            .pending
-                                                            .extend(chunks.into_iter().map(Ok));
-                                                    }
-                                                    Err(err) => {
-                                                        state.done = true;
-                                                        state.pending.push_back(Err(err));
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            Err(err) => {
-                                                state.done = true;
-                                                state.pending.push_back(Err(
-                                                    LlmError::StreamProtocol {
-                                                        provider: provider_name.to_owned(),
-                                                        message: format!(
-                                                            "stream json 解析失败: {err}"
-                                                        ),
-                                                    },
-                                                ));
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => {} // 非 data 帧，跳过
-                                    Err(err) => {
-                                        state.done = true;
-                                        state.pending.push_back(Err(err));
-                                        break;
-                                    }
-                                }
-                            }
+                            Self::process_buffered_events(provider_name, &mut state);
                         }
                         Some(Err(err)) => {
-                            state.done = true;
-                            return Some((
-                                Err(map_stream_read_error(read_timeout_ms, err)),
-                                state,
-                            ));
+                            state.finish();
+                            return Some((Err(map_stream_read_error(read_timeout_ms, err)), state));
                         }
                         None => {
-                            // 字节流结束：检查是否有未 yield 的 tool calls
-                            state.done = true;
-                            match ChatCompletionsAdapter::drain_partial_tool_calls(
-                                &mut state.tool_calls,
-                            ) {
-                                Ok(tool_calls) if !tool_calls.is_empty() => {
-                                    return Some((
-                                        Ok(ChatChunk {
-                                            tool_calls,
-                                            ..ChatChunk::default()
-                                        }),
-                                        state,
-                                    ));
+                            state.finish();
+                            match Self::finalize_pending_tool_calls(&mut state.tool_calls) {
+                                Ok(Some(tool_calls)) => {
+                                    state.enqueue_tool_calls(tool_calls);
                                 }
-                                Ok(_) => return None,
+                                Ok(None) => return None,
                                 Err(err) => return Some((Err(err), state)),
                             }
                         }

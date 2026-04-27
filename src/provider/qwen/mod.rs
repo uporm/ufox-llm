@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::{Stream, stream};
+use futures::Stream;
 
 use crate::{
     error::LlmError,
@@ -88,6 +88,7 @@ mod tests {
     };
 
     use super::*;
+    use futures::stream;
 
     fn test_transport() -> Transport {
         Transport::new(TransportConfig {

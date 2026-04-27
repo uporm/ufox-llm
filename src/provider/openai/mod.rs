@@ -41,6 +41,7 @@ use crate::{
     error::LlmError,
     middleware::Transport,
     provider::ApiProtocol,
+    types::content::Role,
     types::response::ChatChunk,
 };
 
@@ -52,6 +53,19 @@ use responses::ResponsesAdapter;
 /// 两套协议共用的流式 chunk 输出类型别名。
 pub(super) type ChatChunkStream =
     Pin<Box<dyn Stream<Item = Result<ChatChunk, LlmError>> + Send>>;
+
+fn unsupported_multimodal_error(http_context: &HttpContext, role: Role) -> LlmError {
+    LlmError::UnsupportedCapability {
+        provider: Some(http_context.provider_name().into()),
+        capability: match role {
+            Role::User => "user_multimodal_content",
+            Role::System => "system_multimodal_content",
+            Role::Assistant => "assistant_multimodal_content",
+            Role::Tool => "tool_multimodal_content",
+        }
+        .into(),
+    }
+}
 
 /// 构造 OpenAI 兼容 provider adapter。
 ///

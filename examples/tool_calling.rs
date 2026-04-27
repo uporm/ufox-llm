@@ -1,7 +1,8 @@
 use std::error::Error;
 
+use futures::StreamExt;
 use ufox_llm::{
-    ChatRequest, Client, ContentPart, Message, Provider, Role, Tool, ToolChoice, ToolResult,
+    ChatRequest, Client, ContentPart, Message, Role, Tool, ToolChoice, ToolResult,
     ToolResultPayload,
 };
 
@@ -20,19 +21,15 @@ fn run_local_tool(
 }
 
 #[tokio::main]
-async fn main() {
-    if let Err(err) = run().await {
-        eprintln!("tool_calling 示例执行失败：{err}");
-        std::process::exit(1);
-    }
-}
-
-async fn run() -> Result<(), Box<dyn Error>> {
-    let client = Client::builder()
-        .provider(Provider::OpenAI)
-        .api_key("sk-xxx")
-        .model("gpt-4o")
-        .build()?;
+async fn main() -> Result<(), Box<dyn Error>> {
+    // 默认走环境变量，避免示例里硬编码密钥，也和其他示例保持一致。
+    let client = Client::from_env()?;
+    // 也可以显式使用 builder：
+    // let client = Client::builder()
+    //     .provider(Provider::OpenAI)
+    //     .api_key("sk-xxx")
+    //     .model("gpt-4o")
+    //     .build()?;
 
     let weather_tool = Tool::function(
         "get_weather",
@@ -49,10 +46,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
         content: vec![ContentPart::text("帮我查询杭州天气，并给出穿衣建议")],
         name: None,
     }];
+    let mut started_thinking = false;
+    let mut started_answer = false;
 
     loop {
-        let output = client
-            .chat(
+        let mut stream = client
+            .chat_stream(
                 ChatRequest::builder()
                     .messages(messages.clone())
                     .tools(vec![weather_tool.clone()])
@@ -61,17 +60,62 @@ async fn run() -> Result<(), Box<dyn Error>> {
             )
             .await?;
 
-        let tool_calls = output.tool_calls.clone();
-        messages.push(output.into_message());
+        let mut assistant_text = String::new();
+        let mut assistant_tool_calls = Vec::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let is_finished = chunk.is_finished();
+            if let Some(thinking) = &chunk.thinking_delta {
+                if !started_thinking {
+                    println!("=== 思考过程 ===\n");
+                    started_thinking = true;
+                }
+                print!("{thinking}");
+            }
+            if let Some(text) = &chunk.text_delta {
+                if !started_answer {
+                    if started_thinking {
+                        println!("\n\n=== 最终回答 ===\n");
+                    } else {
+                        println!("=== 最终回答 ===\n");
+                    }
+                    started_answer = true;
+                }
+                print!("{text}");
+                assistant_text.push_str(text);
+            }
+            if !chunk.tool_calls.is_empty() {
+                assistant_tool_calls.extend(chunk.tool_calls.iter().cloned());
+            }
+            if is_finished {
+                break;
+            }
+        }
+
+        let tool_calls = assistant_tool_calls.clone();
+        let mut assistant_content = Vec::new();
+        if !assistant_text.is_empty() {
+            assistant_content.push(ContentPart::text(assistant_text));
+        }
+        for call in assistant_tool_calls {
+            assistant_content.push(ContentPart::ToolCall(call));
+        }
+        messages.push(Message {
+            role: Role::Assistant,
+            content: assistant_content,
+            name: None,
+        });
 
         if tool_calls.is_empty() {
-            if let Some(last) = messages.last() {
-                println!("{}", last.text());
+            if started_thinking || started_answer {
+                println!();
             }
             break;
         }
 
         for call in &tool_calls {
+            println!("\n[local-tool] 调用 {}", call.tool_name);
             let result = run_local_tool(&call.tool_name, &call.arguments)?;
             messages.push(Message {
                 role: Role::Tool,

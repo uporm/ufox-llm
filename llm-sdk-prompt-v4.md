@@ -767,11 +767,11 @@ impl ChatChunk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
-    Stop,
-    Length,
+    Completed,
+    MaxOutputTokens,
     ToolCalls,
     ContentFilter,
-    Other,
+    Failed,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

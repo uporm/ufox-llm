@@ -123,9 +123,19 @@ pub(super) trait OpenAiRequestBuilder {
 ///
 /// 401/403 → 认证错误；429 → 限速；其余 → [`LlmError::HttpStatus`]。
 pub(super) fn map_error_response(provider_name: &str, status: u16, body_text: &str) -> LlmError {
+    let mut parsed_message = None;
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_text) {
+        if let Some(msg) = json.pointer("/error/message").and_then(|v| v.as_str()) {
+            parsed_message = Some(msg.to_owned());
+        } else if let Some(msg) = json.get("error").and_then(|v| v.as_str()) {
+            parsed_message = Some(msg.to_owned());
+        }
+    }
+    let display_body = parsed_message.unwrap_or_else(|| body_text.to_owned());
+
     match status {
         401 | 403 => LlmError::Authentication {
-            message: format!("[{provider_name}] {body_text}"),
+            message: format!("[{provider_name}] {display_body}"),
         },
         429 => LlmError::RateLimit {
             retry_after_secs: None,
@@ -133,7 +143,7 @@ pub(super) fn map_error_response(provider_name: &str, status: u16, body_text: &s
         _ => LlmError::HttpStatus {
             provider: provider_name.into(),
             status,
-            body: body_text.to_owned(),
+            body: display_body,
         },
     }
 }
@@ -183,11 +193,11 @@ pub(super) async fn send_bytes_request<A: OpenAiRequestBuilder>(
 /// 将 `finish_reason` 字符串映射为 [`FinishReason`]。
 pub(super) fn parse_finish_reason(raw: Option<&str>) -> Option<FinishReason> {
     match raw {
-        Some("stop") => Some(FinishReason::Stop),
-        Some("length") => Some(FinishReason::Length),
+        Some("stop") | Some("completed") => Some(FinishReason::Completed),
+        Some("length") | Some("max_tokens") | Some("max_output_tokens") => Some(FinishReason::MaxOutputTokens),
         Some("tool_calls") => Some(FinishReason::ToolCalls),
         Some("content_filter") => Some(FinishReason::ContentFilter),
-        Some(_) => Some(FinishReason::Other),
+        Some(_) => Some(FinishReason::Failed),
         None => None,
     }
 }
@@ -242,15 +252,22 @@ pub(super) fn map_stream_read_error(read_timeout_ms: u64, err: reqwest::Error) -
 /// 找到分隔符时，将帧内容（含分隔符）从缓冲头部 drain 出来并返回；
 /// 缓冲中不足一帧时返回 `None`。
 pub(super) fn take_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
-    for index in 0..buffer.len() {
-        if buffer[index..].starts_with(b"\r\n\r\n") {
-            return Some(buffer.drain(..index + 4).collect());
-        }
-        if buffer[index..].starts_with(b"\n\n") {
-            return Some(buffer.drain(..index + 2).collect());
+    let mut split_at = None;
+    for (i, window) in buffer.windows(2).enumerate() {
+        if window == b"\n\n" {
+            split_at = Some((i, 2));
+            break;
+        } else if window == b"\r\n" && buffer.get(i..i + 4) == Some(b"\r\n\r\n") {
+            split_at = Some((i, 4));
+            break;
         }
     }
-    None
+
+    if let Some((idx, len)) = split_at {
+        Some(buffer.drain(..idx + len).collect())
+    } else {
+        None
+    }
 }
 
 /// 从一个 SSE 帧字节序列中提取所有 `data:` 行的内容，拼接为字符串。
