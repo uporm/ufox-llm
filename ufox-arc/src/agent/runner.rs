@@ -5,22 +5,26 @@ use ufox_llm::{
     ToolResultPayload, Usage,
 };
 
-use crate::agent::config::AgentConfig;
-use crate::agent::step::{ExecutionState, ExecutionStep, StepInput, StepKind, StepOutput};
+use super::config::AgentConfig;
+use super::execution::{ExecutionState, ExecutionStep, StepInput, StepKind, StepOutput};
 use crate::error::ArcError;
 use crate::interrupt::{InterruptCtx, InterruptHandler};
 use crate::memory::{MemoryStore, strategy};
 use crate::session::{SessionId, UserId};
 use crate::tools::ToolManager;
 
-/// 记忆上下文：检索时所需的 store 引用与作用域标识。
+const MEMORY_CONTEXT_MESSAGE_NAME: &str = "memory_context";
+
+/// 记忆检索所需的上下文。
 pub(crate) struct MemoryCtx<'a> {
     pub store: &'a dyn MemoryStore,
     pub user_id: &'a UserId,
     pub session_id: &'a SessionId,
 }
 
-/// `run_loop` 的调用上下文，归组所有不可变依赖，避免过长的参数列表。
+/// `run_loop` 的调用上下文。
+///
+/// 将主要依赖聚合在一起，避免函数签名随功能扩展而失控。
 pub(crate) struct LoopCtx<'a> {
     pub llm: &'a Client,
     pub system: Option<&'a str>,
@@ -30,7 +34,7 @@ pub(crate) struct LoopCtx<'a> {
     pub interrupt: Option<(&'a dyn InterruptHandler, &'a UserId, &'a SessionId)>,
 }
 
-/// `run_loop` 的内部返回值；不暴露给公开 API。
+/// `run_loop` 的内部返回值。
 pub(crate) struct LoopResult {
     pub steps: Vec<ExecutionStep>,
     pub final_response: ChatResponse,
@@ -68,10 +72,10 @@ pub(crate) async fn run_loop(
         total_tokens: 0,
     };
 
-    // Perceive（可选）：检索记忆并注入上下文
+    // Perceive（可选）：检索记忆并注入上下文。
     if config.enable_perceive {
         let t = Instant::now();
-        let query = messages.last().map(|m| m.text()).unwrap_or_default();
+        let query = latest_message_text(messages);
         tracing::debug!(query = %query, "perceive: retrieving memory context");
 
         let hits = if let Some(ref ctx) = memory {
@@ -80,14 +84,7 @@ pub(crate) async fn run_loop(
             let context_text = strategy::format_context(&retrieved);
             if !context_text.is_empty() {
                 tracing::debug!(hits = retrieved.len(), "perceive: injecting memory context");
-                messages.insert(
-                    0,
-                    Message {
-                        role: Role::User,
-                        content: vec![ContentPart::text(context_text)],
-                        name: Some("memory_context".to_string()),
-                    },
-                );
+                messages.insert(0, build_memory_context_message(context_text));
             }
             retrieved
         } else {
@@ -105,7 +102,7 @@ pub(crate) async fn run_loop(
         idx += 1;
     }
 
-    // 主循环
+    // 主循环。
     let mut iteration = 0usize;
     loop {
         if iteration >= config.max_iterations {
@@ -120,7 +117,7 @@ pub(crate) async fn run_loop(
             return Err(ArcError::Timeout(config.timeout));
         }
 
-        // Think：调用 LLM
+        // Think：调用 LLM。
         tracing::debug!(iteration, "think: calling LLM");
         let think_start = Instant::now();
         let req = build_request(system, messages, config, tools);
@@ -132,11 +129,7 @@ pub(crate) async fn run_loop(
 
         let think_dur = think_start.elapsed();
 
-        if let Some(u) = &response.usage {
-            total_usage.prompt_tokens += u.prompt_tokens;
-            total_usage.completion_tokens += u.completion_tokens;
-            total_usage.total_tokens += u.total_tokens;
-        }
+        merge_usage(&mut total_usage, response.usage.as_ref());
 
         let finish_reason = response.finish_reason.unwrap_or(FinishReason::Completed);
         let has_tool_calls =
@@ -192,7 +185,7 @@ pub(crate) async fn run_loop(
             });
         }
 
-        // Act：执行工具调用（Abort 时提前返回错误）
+        // Act：执行工具调用；用户中止时立即终止整个循环。
         tracing::debug!(
             tool_calls = response.tool_calls.len(),
             "act: executing tools"
@@ -215,15 +208,9 @@ pub(crate) async fn run_loop(
         });
         idx += 1;
 
-        for result in &tool_results {
-            messages.push(Message {
-                role: Role::Tool,
-                content: vec![ContentPart::ToolResult(result.clone())],
-                name: None,
-            });
-        }
+        append_tool_result_messages(messages, &tool_results);
 
-        // Observe（可选）
+        // Observe（可选）。
         if config.enable_observe {
             let t = Instant::now();
             let observation = format!("Received {} tool result(s).", tool_results.len());
@@ -238,7 +225,7 @@ pub(crate) async fn run_loop(
             idx += 1;
         }
 
-        // Reflect（可選）
+        // Reflect（可选）。
         if config.enable_reflect {
             let t = Instant::now();
             steps.push(ExecutionStep {
@@ -257,6 +244,7 @@ pub(crate) async fn run_loop(
     }
 }
 
+/// 构建一次 LLM `chat` 请求。
 pub(crate) fn build_request(
     system: Option<&str>,
     messages: &[Message],
@@ -281,8 +269,8 @@ pub(crate) fn build_request(
 
 /// 执行所有工具调用。
 ///
-/// - 普通错误：封装为 `is_error=true` 结果，循环继续。
-/// - `Abort` 决策：返回 `Err`，立即中止整个循环。
+/// 普通错误会转换为 `is_error=true` 的工具结果继续返回；
+/// 若用户明确中止，则直接返回错误中断主循环。
 pub(crate) async fn execute_tools(
     calls: &[ufox_llm::ToolCall],
     tools: Option<&ToolManager>,
@@ -302,19 +290,60 @@ pub(crate) async fn execute_tools(
         let result = manager.execute(call, ctx).await;
         match result {
             Ok(r) => results.push(r),
-            // Abort はエラーとして伝播させる
-            Err(ArcError::Tool { ref message, .. }) if message == "execution aborted by user" => {
+            Err(ref e) if is_execution_aborted_by_user(e) => {
                 return Err(result.unwrap_err());
             }
-            Err(e) => results.push(ToolResult {
-                tool_call_id: call.id.clone(),
-                tool_name: Some(call.tool_name.clone()),
-                payload: ToolResultPayload::text(e.to_string()),
-                is_error: true,
-            }),
+            Err(e) => results.push(tool_error_result(call, e)),
         }
     }
     Ok(results)
+}
+
+/// 将工具结果追加为 `tool` 角色消息。
+pub(crate) fn append_tool_result_messages(messages: &mut Vec<Message>, results: &[ToolResult]) {
+    messages.extend(results.iter().cloned().map(|result| Message {
+        role: Role::Tool,
+        content: vec![ContentPart::ToolResult(result)],
+        name: None,
+    }));
+}
+
+fn latest_message_text(messages: &[Message]) -> String {
+    messages.last().map(|message| message.text()).unwrap_or_default()
+}
+
+fn build_memory_context_message(context_text: String) -> Message {
+    Message {
+        role: Role::User,
+        content: vec![ContentPart::text(context_text)],
+        name: Some(MEMORY_CONTEXT_MESSAGE_NAME.to_string()),
+    }
+}
+
+fn merge_usage(total: &mut Usage, usage: Option<&Usage>) {
+    let Some(usage) = usage else {
+        return;
+    };
+
+    total.prompt_tokens += usage.prompt_tokens;
+    total.completion_tokens += usage.completion_tokens;
+    total.total_tokens += usage.total_tokens;
+}
+
+fn is_execution_aborted_by_user(error: &ArcError) -> bool {
+    matches!(
+        error,
+        ArcError::Tool { message, .. } if message == "execution aborted by user"
+    )
+}
+
+fn tool_error_result(call: &ufox_llm::ToolCall, error: ArcError) -> ToolResult {
+    ToolResult {
+        tool_call_id: call.id.clone(),
+        tool_name: Some(call.tool_name.clone()),
+        payload: ToolResultPayload::text(error.to_string()),
+        is_error: true,
+    }
 }
 
 fn stub_execute_tools(calls: &[ufox_llm::ToolCall]) -> Vec<ToolResult> {

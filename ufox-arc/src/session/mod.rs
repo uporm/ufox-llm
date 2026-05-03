@@ -1,6 +1,7 @@
 pub mod media;
 pub mod session_store;
 pub mod store;
+mod streaming;
 
 pub use media::{MediaRef, Modality};
 pub use session_store::{InMemorySessionStore, SqliteSessionStore};
@@ -11,16 +12,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
-use futures::{Stream, StreamExt};
-use ufox_llm::{ChatResponse, ContentPart, FinishReason, Message, Role, ToolCall, Usage};
+use futures::Stream;
+use ufox_llm::{ChatResponse, ContentPart, Message, Role, Usage};
 
 use self::media::{DefaultExtractor, MediaExtractor};
+use self::streaming::run_streaming_loop;
 use crate::agent::Agent;
-use crate::agent::loop_::{LoopCtx, LoopResult, MemoryCtx, build_request, execute_tools, run_loop};
-use crate::agent::step::{ExecutionState, ExecutionStep, StepInput, StepKind, StepOutput};
+use crate::agent::execution::{ExecutionState, ExecutionStep, StepInput, StepKind, StepOutput};
+use crate::agent::runner::{LoopCtx, LoopResult, MemoryCtx, run_loop};
 use crate::error::ArcError;
-use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryScope, strategy};
+use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryScope};
 use ufox_llm::MediaSource;
+
+const ATTACHED_MEDIA_MESSAGE_NAME: &str = "attached_media";
 
 /// 用户的唯一标识，用于跨会话记忆归属。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -223,21 +227,12 @@ impl Session {
         I: Into<SessionInput>,
     {
         let wall_start = Instant::now();
-
-        {
-            let mut state = self.shared.state.lock().await;
-            if matches!(*state, SessionState::Running { .. }) {
-                return Err(ArcError::SessionBusy);
-            }
-            *state = SessionState::Running {
-                started_at: Instant::now(),
-            };
-        }
+        self.try_start_run().await?;
 
         let user_message = input.into().into_message();
         let loop_result = self.run_chat(user_message).await;
 
-        *self.shared.state.lock().await = SessionState::Idle;
+        self.finish_run().await;
 
         let LoopResult {
             steps,
@@ -271,15 +266,7 @@ impl Session {
     where
         I: Into<SessionInput>,
     {
-        {
-            let mut state = self.shared.state.lock().await;
-            if matches!(*state, SessionState::Running { .. }) {
-                return Err(ArcError::SessionBusy);
-            }
-            *state = SessionState::Running {
-                started_at: Instant::now(),
-            };
-        }
+        self.try_start_run().await?;
 
         let user_message = input.into().into_message();
         self.shared.messages.lock().await.push(user_message);
@@ -300,7 +287,7 @@ impl Session {
             {
                 let _ = tx.send(Err(e)).await;
             }
-            *shared.state.lock().await = SessionState::Idle;
+            finish_shared_run(&shared).await;
         });
 
         let event_stream = stream! {
@@ -339,6 +326,21 @@ impl Session {
             &mut messages,
         )
         .await
+    }
+
+    async fn try_start_run(&self) -> Result<(), ArcError> {
+        let mut state = self.shared.state.lock().await;
+        if matches!(*state, SessionState::Running { .. }) {
+            return Err(ArcError::SessionBusy);
+        }
+        *state = SessionState::Running {
+            started_at: Instant::now(),
+        };
+        Ok(())
+    }
+
+    async fn finish_run(&self) {
+        finish_shared_run(&self.shared).await;
     }
 
     /// 向会话记忆写入一条记录。
@@ -427,7 +429,7 @@ impl Session {
             messages.push(Message {
                 role: Role::User,
                 content: extracted.parts.clone(),
-                name: Some("attached_media".to_string()),
+                name: Some(ATTACHED_MEDIA_MESSAGE_NAME.to_string()),
             });
         }
 
@@ -476,186 +478,8 @@ impl Session {
     }
 }
 
-/// 完整推理循环的流式版本：每个 Think 步骤以 chunk 事件推送，
-/// Act 步骤以 step 事件推送，结束时发送 `state_change: Completed`。
-///
-/// 函数持有对 `SessionShared` 的 `Arc` 引用，在 `tokio::spawn` 中运行。
-async fn run_streaming_loop(
-    shared: Arc<SessionShared>,
-    user_id: UserId,
-    session_id: SessionId,
-    tx: &tokio::sync::mpsc::Sender<Result<ExecutionEvent, ArcError>>,
-) -> Result<(), ArcError> {
-    let agent = &shared.agent;
-    let config = &agent.config;
-    let deadline = Instant::now() + config.timeout;
-
-    // Perceive（可选）：检索记忆并注入上下文
-    if config.enable_perceive
-        && let Some(store) = agent.memory.as_deref()
-    {
-        let retrieved = strategy::retrieve_context(store, &session_id, &user_id, 10).await;
-        let context_text = strategy::format_context(&retrieved);
-        if !context_text.is_empty() {
-            shared.messages.lock().await.insert(
-                0,
-                Message {
-                    role: Role::User,
-                    content: vec![ContentPart::text(context_text)],
-                    name: Some("memory_context".to_string()),
-                },
-            );
-        }
-    }
-
-    let mut iteration = 0usize;
-    let mut step_idx = 0usize;
-
-    loop {
-        if iteration >= config.max_iterations {
-            return Err(ArcError::MaxIterations(config.max_iterations));
-        }
-        iteration += 1;
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(ArcError::Timeout(config.timeout));
-        }
-
-        // Build request from current history (lock then release before streaming)
-        let req = {
-            let messages = shared.messages.lock().await;
-            build_request(
-                agent.system.as_deref(),
-                &messages,
-                config,
-                agent.tools.as_deref(),
-            )
-        };
-
-        // Think（流式）
-        let mut accumulated_text = String::new();
-        let mut accumulated_calls: Vec<ToolCall> = Vec::new();
-        let mut last_finish_reason: Option<FinishReason> = None;
-        let mut step_usage = None;
-
-        let stream_result = tokio::time::timeout(remaining, agent.llm.chat_stream(req)).await;
-
-        let mut llm_stream = match stream_result {
-            Err(_) => return Err(ArcError::Timeout(config.timeout)),
-            Ok(Err(e)) => return Err(ArcError::Llm(e)),
-            Ok(Ok(s)) => s,
-        };
-
-        while let Some(chunk_result) = llm_stream.next().await {
-            let chunk = match chunk_result {
-                Err(e) => return Err(ArcError::Llm(e)),
-                Ok(c) => c,
-            };
-            if let Some(t) = &chunk.text_delta {
-                accumulated_text.push_str(t);
-            }
-            accumulated_calls.extend(chunk.tool_calls.clone());
-            if chunk.finish_reason.is_some() {
-                last_finish_reason = chunk.finish_reason;
-            }
-            if chunk.usage.is_some() {
-                step_usage = chunk.usage.clone();
-            }
-
-            if tx
-                .send(Ok(ExecutionEvent {
-                    user_id: user_id.clone(),
-                    session_id: session_id.clone(),
-                    chunk: Some(chunk),
-                    step: None,
-                    state_change: None,
-                }))
-                .await
-                .is_err()
-            {
-                // 接收端已丢弃，静默退出
-                return Ok(());
-            }
-        }
-
-        let finish_reason = last_finish_reason.unwrap_or(FinishReason::Completed);
-        let has_tool_calls =
-            !accumulated_calls.is_empty() || finish_reason == FinishReason::ToolCalls;
-
-        // 将 assistant 消息追加进历史
-        {
-            let mut content: Vec<ContentPart> = Vec::new();
-            if !accumulated_text.is_empty() {
-                content.push(ContentPart::text(accumulated_text));
-            }
-            for call in &accumulated_calls {
-                content.push(ContentPart::ToolCall(call.clone()));
-            }
-            if !content.is_empty() {
-                shared.messages.lock().await.push(Message {
-                    role: Role::Assistant,
-                    content,
-                    name: None,
-                });
-            }
-        }
-        step_idx += 1;
-
-        if !has_tool_calls {
-            let _ = tx
-                .send(Ok(ExecutionEvent {
-                    user_id: user_id.clone(),
-                    session_id: session_id.clone(),
-                    chunk: None,
-                    step: None,
-                    state_change: Some(ExecutionState::Completed),
-                }))
-                .await;
-            return Ok(());
-        }
-
-        // Act：执行工具调用
-        let interrupt = agent
-            .interrupt_handler
-            .as_deref()
-            .map(|h| (h, &user_id, &session_id));
-        let act_start = Instant::now();
-        let tool_results =
-            execute_tools(&accumulated_calls, agent.tools.as_deref(), interrupt).await?;
-
-        for result in &tool_results {
-            shared.messages.lock().await.push(Message {
-                role: Role::Tool,
-                content: vec![ContentPart::ToolResult(result.clone())],
-                name: None,
-            });
-        }
-
-        let act_step = ExecutionStep {
-            index: step_idx,
-            kind: StepKind::Act,
-            input: StepInput::ToolCalls(accumulated_calls),
-            output: StepOutput::ToolResults(tool_results),
-            duration: act_start.elapsed(),
-            usage: step_usage,
-        };
-        step_idx += 1;
-
-        if tx
-            .send(Ok(ExecutionEvent {
-                user_id: user_id.clone(),
-                session_id: session_id.clone(),
-                chunk: None,
-                step: Some(act_step),
-                state_change: None,
-            }))
-            .await
-            .is_err()
-        {
-            return Ok(());
-        }
-    }
+async fn finish_shared_run(shared: &SessionShared) {
+    *shared.state.lock().await = SessionState::Idle;
 }
 
 #[cfg(test)]
