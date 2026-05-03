@@ -1,7 +1,7 @@
 /// 工具执行过程中产生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
-    #[error("tool '{name}' not found in registry")]
+    #[error("tool '{name}' not found in manager")]
     NotFound { name: String },
 
     #[error("invalid parameters for '{tool}': {message}")]

@@ -237,7 +237,8 @@ impl Default for ExecutionConfig {
 **本阶段必须实现：**
 
 - `Tool` trait
-- `ToolRegistry`
+- `AgentBuilder` 作为工具装配主入口
+- 内部工具管理器
 - 基于 JSON Schema 的参数定义
 - 工具执行前校验
 - 工具执行结果标准化
@@ -593,17 +594,16 @@ pub struct ExecutionEvent {
 以下接口为默认实现建议；若采用不同写法，必须保持相同职责边界与外部行为。
 
 ```rust
-pub struct ToolMetadata {
+pub struct ToolSpec {
     pub name: String,
     pub description: String,
     pub parameters_schema: serde_json::Value,
-    pub requires_confirmation: bool,
     pub timeout: Duration,
 }
 
 #[async_trait]
 pub trait Tool: Send + Sync {
-    fn metadata(&self) -> &ToolMetadata;
+    fn spec(&self) -> &ToolSpec;
 
     async fn execute(
         &self,
@@ -611,17 +611,18 @@ pub trait Tool: Send + Sync {
     ) -> Result<ufox_llm::ToolResultPayload, ToolError>;
 }
 
-pub struct ToolRegistry {
+pub(crate) struct ToolManager {
     tools: HashMap<String, Arc<dyn Tool>>,
 }
 
-impl ToolRegistry {
-    pub fn register(&mut self, tool: impl Tool + 'static) -> Result<()>;
-    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>>;
-    pub fn list_names(&self) -> Vec<String>;
+impl ToolManager {
+    pub(crate) fn register(
+        &mut self,
+        tools: impl IntoIterator<Item = Arc<dyn Tool>>,
+    ) -> Result<()>;
     
     /// 执行工具调用（包含校验、超时、确认逻辑）
-    pub async fn execute(
+    pub(crate) async fn execute(
         &self,
         tool_call: &ToolCall,
         interrupt_handler: Option<&dyn InterruptHandler>,
@@ -644,7 +645,7 @@ impl ToolRegistry {
 - **不要引入 `ToolContext`**，工具执行不需要额外上下文
 - 工具确认逻辑统一通过 HITL 处理，不在工具层重复
 - 第一版不处理多模态参数引用，简化实现
-- 静态配置（`requires_confirmation`、`timeout`）提取到 `ToolMetadata`，避免每次调用都查询
+- 静态配置（如 `timeout`）提取到 `ToolSpec`，避免每次调用都查询
 
 ### 6.4 记忆系统
 
@@ -774,7 +775,7 @@ pub struct ExtractedContent {
 
 ```rust
 pub enum InterruptReason {
-    ToolConfirmation { tool: String, params: serde_json::Value },
+    ToolConfirm { tool: String, params: serde_json::Value, reason: Option<String> },
     ErrorRecovery { error: String, proposed_action: String },
     UserBreakpoint { condition: String },
 }
@@ -882,18 +883,18 @@ async fn main() -> anyhow::Result<()> {
 
 ```rust
 use serde_json::json;
-use ufox_arc::{Agent, Tool, ToolMetadata};
+use ufox_arc::{Agent, Tool, ToolSpec};
 use ufox_llm::{Client, ToolResultPayload};
 use std::time::Duration;
 
 struct WeatherTool {
-    metadata: ToolMetadata,
+    spec: ToolSpec,
 }
 
 impl WeatherTool {
     fn new() -> Self {
         Self {
-            metadata: ToolMetadata {
+            spec: ToolSpec {
                 name: "get_weather".to_string(),
                 description: "查询指定城市的实时天气".to_string(),
                 parameters_schema: json!({
@@ -903,7 +904,6 @@ impl WeatherTool {
                     },
                     "required": ["city"]
                 }),
-                requires_confirmation: false,
                 timeout: Duration::from_secs(10),
             },
         }
@@ -912,8 +912,8 @@ impl WeatherTool {
 
 #[async_trait::async_trait]
 impl Tool for WeatherTool {
-    fn metadata(&self) -> &ToolMetadata {
-        &self.metadata
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
     }
 
     async fn execute(
@@ -1114,7 +1114,7 @@ metrics_port = 9090
 - Agent、Session、工具、记忆、多模态、观测配置分离
 - 默认值要能支撑本地开发
 - 支持从 TOML、环境变量或 Builder 注入覆盖
-- 配置文件中的 `confirmation_required` 可以覆盖工具的 `requires_confirmation` 声明
+- 配置文件中的 `confirmation_required` 可以覆盖工具的默认确认行为
 
 ## 10. 工程质量要求
 
@@ -1282,7 +1282,7 @@ tempfile = "3"
 let agent = Agent::new();
 
 // ✅ 好的注释（解释为什么）
-// 使用 Arc 共享 Agent，因为多个 Session 需要访问同一个工具注册表
+// 使用 Arc 共享 Agent，因为多个 Session 需要访问同一个工具管理器
 let agent = Arc::new(Agent::new());
 
 // ✅ 好的注释（说明限制）
@@ -1338,7 +1338,7 @@ AI 工具在完成每个阶段后，应对照以下清单自检：
 ### 阶段 3 检查清单
 
 - [ ] `Tool` trait 已定义
-- [ ] `ToolRegistry` 可以注册和执行工具
+- [ ] `AgentBuilder` 可以装配工具，内部注册表可以执行工具
 - [ ] 至少实现了 3 个内置工具
 - [ ] 工具参数校验正常
 - [ ] 工具错误可以结构化返回
@@ -1390,9 +1390,9 @@ AI 工具在完成每个阶段后，应对照以下清单自检：
 
 **A:** `ExecutionEngine` 是 `Session` 的内部实现细节，不应该暴露给外部。外部只需要关心 `Session` 的 `chat()` 和 `chat_stream()` 方法。
 
-### Q4: 为什么工具的 `requires_confirmation` 要提取到 `ToolMetadata`？
+### Q4: 为什么工具的确认逻辑不放在 `ToolSpec` 里？
 
-**A:** 静态配置不应该是方法，每次调用都查询会增加开销。提取到 `ToolMetadata` 后，注册时就确定了这些属性。
+**A:** 对于需要按参数动态决定的工具，确认逻辑放在 `confirm()` 更清晰；只有真正不会变化的规格才适合留在 `ToolSpec`。
 
 ### Q5: 为什么第一版不做多 Agent 和技能系统？
 

@@ -6,17 +6,17 @@ use serde_json::json;
 use ufox_llm::ToolResultPayload;
 
 use crate::tools::result::ToolError;
-use crate::tools::{Tool, ToolMetadata};
+use crate::tools::{Confirm, Tool, ToolSpec};
 
 /// 以文本模式读取指定路径文件。
 pub struct FileReadTool {
-    metadata: ToolMetadata,
+    spec: ToolSpec,
 }
 
 impl Default for FileReadTool {
     fn default() -> Self {
         Self {
-            metadata: ToolMetadata {
+            spec: ToolSpec {
                 name: "file_read".to_string(),
                 description: "读取指定路径的文件内容，以文本形式返回。".to_string(),
                 parameters_schema: json!({
@@ -29,7 +29,6 @@ impl Default for FileReadTool {
                     },
                     "required": ["path"]
                 }),
-                requires_confirmation: false,
                 timeout: Duration::from_secs(10),
             },
         }
@@ -44,8 +43,8 @@ impl FileReadTool {
 
 #[async_trait]
 impl Tool for FileReadTool {
-    fn metadata(&self) -> &ToolMetadata {
-        &self.metadata
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResultPayload, ToolError> {
@@ -70,13 +69,13 @@ impl Tool for FileReadTool {
 
 /// 将文本内容写入指定路径文件（文件不存在时自动创建）。
 pub struct FileWriteTool {
-    metadata: ToolMetadata,
+    spec: ToolSpec,
 }
 
 impl Default for FileWriteTool {
     fn default() -> Self {
         Self {
-            metadata: ToolMetadata {
+            spec: ToolSpec {
                 name: "file_write".to_string(),
                 description: "将给定文本内容写入指定路径文件，文件不存在时自动创建。".to_string(),
                 parameters_schema: json!({
@@ -93,8 +92,6 @@ impl Default for FileWriteTool {
                     },
                     "required": ["path", "content"]
                 }),
-                // 写文件属于破坏性操作，默认需要确认
-                requires_confirmation: true,
                 timeout: Duration::from_secs(10),
             },
         }
@@ -109,8 +106,12 @@ impl FileWriteTool {
 
 #[async_trait]
 impl Tool for FileWriteTool {
-    fn metadata(&self) -> &ToolMetadata {
-        &self.metadata
+    fn spec(&self) -> &ToolSpec {
+        &self.spec
+    }
+
+    fn confirm(&self, _params: &serde_json::Value) -> Confirm {
+        Ok(Some("写文件属于破坏性操作，默认需要人工确认".into()))
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResultPayload, ToolError> {

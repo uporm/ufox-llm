@@ -20,6 +20,6 @@ pub use session::{
     MediaRef, Modality, Session, SessionId, SessionInput, SessionStore, SqliteSessionStore, UserId,
 };
 pub use tools::{
-    Tool, ToolError, ToolMetadata, ToolRegistry,
+    Tool, ToolError, ToolSpec,
     builtin::{FileReadTool, FileWriteTool, ShellTool},
 };

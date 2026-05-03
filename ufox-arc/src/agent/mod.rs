@@ -13,16 +13,16 @@ use crate::error::ArcError;
 use crate::interrupt::InterruptHandler;
 use crate::memory::MemoryStore;
 use crate::session::{Session, SessionId, UserId};
-use crate::tools::{Tool, ToolRegistry};
+use crate::tools::{Tool, ToolManager};
 
-/// AI Agent 核心结构体。持有 LLM 客户端、工具注册表和配置，
+/// AI Agent 核心结构体。持有 LLM 客户端、工具管理器和配置，
 /// 通过会话执行实际推理。多个会话通过 `Arc` 共享同一个 Agent。
 #[derive(Clone)]
 pub struct Agent {
     pub(crate) llm: Arc<Client>,
     pub(crate) system: Option<String>,
     pub(crate) config: AgentConfig,
-    pub(crate) tools: Option<Arc<ToolRegistry>>,
+    pub(crate) tools: Option<Arc<ToolManager>>,
     pub(crate) memory: Option<Arc<dyn MemoryStore>>,
     pub(crate) interrupt_handler: Option<Arc<dyn InterruptHandler>>,
 }
@@ -111,7 +111,7 @@ impl AgentBuilder {
         self
     }
 
-    /// 设置 HITL 中断处理器；工具的 `requires_confirmation` 触发时将调用此处理器。
+    /// 设置 HITL 中断处理器；工具确认策略要求人工确认时将调用此处理器。
     pub fn interrupt_handler(mut self, handler: impl InterruptHandler + 'static) -> Self {
         self.interrupt_handler = Some(Arc::new(handler));
         self
@@ -139,17 +139,9 @@ impl AgentBuilder {
         let tools = if self.tools.is_empty() {
             None
         } else {
-            let mut registry = ToolRegistry::new();
-            for tool in self.tools {
-                let name = tool.metadata().name.clone();
-                if registry.get(&name).is_some() {
-                    return Err(ArcError::Config(format!(
-                        "tool '{name}' is already registered"
-                    )));
-                }
-                registry.register_arc(tool);
-            }
-            Some(Arc::new(registry))
+            let mut manager = ToolManager::new();
+            manager.register(self.tools)?;
+            Some(Arc::new(manager))
         };
 
         Ok(Agent {

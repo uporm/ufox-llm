@@ -11,9 +11,10 @@ use crate::session::{SessionId, UserId};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "data")]
 pub enum InterruptReason {
-    ToolConfirmation {
+    ToolConfirm {
         tool: String,
         params: serde_json::Value,
+        reason: Option<String>,
     },
     ErrorRecovery {
         error: String,

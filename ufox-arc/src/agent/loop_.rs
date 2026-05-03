@@ -11,7 +11,7 @@ use crate::error::ArcError;
 use crate::interrupt::{InterruptCtx, InterruptHandler};
 use crate::memory::{MemoryStore, strategy};
 use crate::session::{SessionId, UserId};
-use crate::tools::ToolRegistry;
+use crate::tools::ToolManager;
 
 /// 记忆上下文：检索时所需的 store 引用与作用域标识。
 pub(crate) struct MemoryCtx<'a> {
@@ -25,7 +25,7 @@ pub(crate) struct LoopCtx<'a> {
     pub llm: &'a Client,
     pub system: Option<&'a str>,
     pub config: &'a AgentConfig,
-    pub tools: Option<&'a ToolRegistry>,
+    pub tools: Option<&'a ToolManager>,
     pub memory: Option<MemoryCtx<'a>>,
     pub interrupt: Option<(&'a dyn InterruptHandler, &'a UserId, &'a SessionId)>,
 }
@@ -261,7 +261,7 @@ pub(crate) fn build_request(
     system: Option<&str>,
     messages: &[Message],
     config: &AgentConfig,
-    tools: Option<&ToolRegistry>,
+    tools: Option<&ToolManager>,
 ) -> ChatRequest {
     let mut builder = ChatRequest::builder().messages(messages.to_vec());
     if let Some(s) = system {
@@ -270,8 +270,8 @@ pub(crate) fn build_request(
     if let Some(t) = config.temperature {
         builder = builder.temperature(t);
     }
-    if let Some(registry) = tools {
-        let llm_tools = registry.to_llm_tools();
+    if let Some(manager) = tools {
+        let llm_tools = manager.to_llm_tools();
         if !llm_tools.is_empty() {
             builder = builder.tools(llm_tools);
         }
@@ -285,10 +285,10 @@ pub(crate) fn build_request(
 /// - `Abort` 决策：返回 `Err`，立即中止整个循环。
 pub(crate) async fn execute_tools(
     calls: &[ufox_llm::ToolCall],
-    tools: Option<&ToolRegistry>,
+    tools: Option<&ToolManager>,
     interrupt: Option<(&dyn InterruptHandler, &UserId, &SessionId)>,
 ) -> Result<Vec<ToolResult>, ArcError> {
-    let Some(registry) = tools else {
+    let Some(manager) = tools else {
         return Ok(stub_execute_tools(calls));
     };
 
@@ -299,7 +299,7 @@ pub(crate) async fn execute_tools(
             user_id,
             session_id,
         });
-        let result = registry.execute(call, ctx).await;
+        let result = manager.execute(call, ctx).await;
         match result {
             Ok(r) => results.push(r),
             // Abort はエラーとして伝播させる

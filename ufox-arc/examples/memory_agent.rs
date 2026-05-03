@@ -79,10 +79,10 @@ async fn in_memory_demo() -> Result<()> {
 
     // 打印 Perceive 步骤的命中条数
     for step in &result.trace.steps {
-        if matches!(step.kind, ufox_arc::StepKind::Perceive) {
-            if let ufox_arc::StepOutput::MemoryHits(ref hits) = step.output {
-                println!("[session-002] Perceive 命中 {} 条记忆", hits.len());
-            }
+        if matches!(step.kind, ufox_arc::StepKind::Perceive)
+            && let ufox_arc::StepOutput::MemoryHits(ref hits) = step.output
+        {
+            println!("[session-002] Perceive 命中 {} 条记忆", hits.len());
         }
     }
 

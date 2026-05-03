@@ -110,7 +110,7 @@ async fn agent_builder_exposes_enable_flags() {
             ufox_llm::Client::builder()
                 .provider(Provider::Compatible)
                 .api_key("k")
-                .base_url(&server.uri())
+                .base_url(server.uri())
                 .model("m")
                 .build()
                 .unwrap(),

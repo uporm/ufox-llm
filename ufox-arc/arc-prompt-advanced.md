@@ -541,13 +541,13 @@ impl Default for ExecutionConfig {
 ```rust
 // v1：串行执行
 for tool_call in tool_calls {
-    let result = registry.execute(&tool_call, interrupt_handler).await?;
+    let result = manager.execute(&tool_call, interrupt_handler).await?;
     results.push(result);
 }
 
 // v2：并发执行（受 max_concurrent_tools 限制）
 let results = futures::stream::iter(tool_calls)
-    .map(|tc| registry.execute(&tc, interrupt_handler))
+    .map(|tc| manager.execute(&tc, interrupt_handler))
     .buffer_unordered(config.max_concurrent_tools)
     .collect::<Result<Vec<_>>>()
     .await?;

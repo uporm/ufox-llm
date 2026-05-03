@@ -1,7 +1,7 @@
 pub mod builtin;
 pub mod result;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,15 +12,16 @@ use crate::error::ArcError;
 use crate::interrupt::{InterruptCtx, InterruptDecision, InterruptReason};
 pub use result::ToolError;
 
-/// 工具的静态描述信息；注册时确定，执行时不可变。
+/// 工具确认钩子的返回类型；`Some(reason)` 表示需要人工确认。
+pub type Confirm = Result<Option<String>, ToolError>;
+
+/// 工具的静态规格；注册时确定，执行时不可变。
 #[derive(Debug, Clone)]
-pub struct ToolMetadata {
+pub struct ToolSpec {
     pub name: String,
     pub description: String,
     /// 工具参数的 JSON Schema。
     pub parameters_schema: serde_json::Value,
-    /// 是否需要人工确认后才能执行（HITL Phase 6）。
-    pub requires_confirmation: bool,
     /// 单次执行的超时时间。
     pub timeout: Duration,
 }
@@ -28,56 +29,67 @@ pub struct ToolMetadata {
 /// 可供 Agent 调用的工具。
 #[async_trait]
 pub trait Tool: Send + Sync {
-    fn metadata(&self) -> &ToolMetadata;
+    fn spec(&self) -> &ToolSpec;
+
+    /// 根据本次参数决定是否需要人工确认，并可返回触发原因。
+    fn confirm(&self, _params: &serde_json::Value) -> Confirm {
+        Ok(None)
+    }
+
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResultPayload, ToolError>;
 }
 
-/// 工具注册表；持有所有可用工具，并负责执行调度。
-pub struct ToolRegistry {
+/// Agent 运行时使用的工具管理器；对外装配入口统一收敛到 `AgentBuilder`。
+pub(crate) struct ToolManager {
     tools: HashMap<String, Arc<dyn Tool>>,
 }
 
-impl Default for ToolRegistry {
+impl Default for ToolManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ToolRegistry {
-    pub fn new() -> Self {
+impl ToolManager {
+    pub(crate) fn new() -> Self {
         Self {
             tools: HashMap::new(),
         }
     }
 
-    pub fn register(&mut self, tool: impl Tool + 'static) -> Result<(), ArcError> {
-        let name = tool.metadata().name.clone();
-        if self.tools.contains_key(&name) {
-            return Err(ArcError::Config(format!(
-                "tool '{name}' is already registered"
-            )));
+    /// 批量注册共享工具实例；重名时保留首个注册项并记录警告。
+    pub(crate) fn register(
+        &mut self,
+        tools: impl IntoIterator<Item = Arc<dyn Tool>>,
+    ) -> Result<(), ArcError> {
+        let mut pending = Vec::new();
+        let mut names = HashSet::new();
+
+        for tool in tools {
+            let name = tool.spec().name.clone();
+            if self.tools.contains_key(&name) || !names.insert(name.clone()) {
+                // 保留首个同名工具，避免后注册项悄悄覆盖既有行为。
+                tracing::warn!(tool = %name, "tool is already registered; skipping duplicate");
+                continue;
+            }
+            pending.push((name, tool));
         }
-        self.tools.insert(name, Arc::new(tool));
+
+        for (name, tool) in pending {
+            self.tools.insert(name, tool);
+        }
         Ok(())
     }
 
-    pub(crate) fn register_arc(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(tool.metadata().name.clone(), tool);
-    }
-
-    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+    fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }
 
-    pub fn list_names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
-    }
-
-    pub fn to_llm_tools(&self) -> Vec<ufox_llm::Tool> {
+    pub(crate) fn to_llm_tools(&self) -> Vec<ufox_llm::Tool> {
         self.tools
             .values()
             .map(|t| {
-                let m = t.metadata();
+                let m = t.spec();
                 ufox_llm::Tool {
                     name: m.name.clone(),
                     description: m.description.clone(),
@@ -89,12 +101,12 @@ impl ToolRegistry {
 
     /// 执行工具调用：参数校验 → HITL 确认（可选）→ 带超时执行 → 标准化返回。
     ///
-    /// 当 `interrupt` 存在且工具 `requires_confirmation` 为 true 时：
-    /// - `Continue` / `Retry` → 使用原参数执行
-    /// - `ModifyAndContinue(new_params)` → 使用修改后的参数执行
+    /// 当 `interrupt` 存在且工具返回需要确认的原因时：
+    /// - `Continue` / `Retry` → 使用当前参数执行
+    /// - `ModifyAndContinue(new_params)` → 使用修改后的参数重新评估是否需要确认
     /// - `Abort` → 返回 `ArcError::Tool { message: "aborted by user" }`
     #[tracing::instrument(name = "tool.execute", skip(self, interrupt), fields(tool = %tool_call.tool_name))]
-    pub async fn execute<'a>(
+    pub(crate) async fn execute<'a>(
         &self,
         tool_call: &ToolCall,
         interrupt: Option<InterruptCtx<'a>>,
@@ -106,57 +118,63 @@ impl ToolRegistry {
                 message: "not registered".into(),
             })?;
 
-        validate_required_params(
-            &tool.metadata().parameters_schema,
-            &tool_call.arguments,
-            &tool_call.tool_name,
-        )?;
+        // 允许工具根据本次参数动态决定是否需要 HITL，并在用户修改参数后重新评估。
+        let mut args = tool_call.arguments.clone();
+        loop {
+            validate_required_params(&tool.spec().parameters_schema, &args, &tool_call.tool_name)?;
 
-        // HITL 确认
-        let args = if tool.metadata().requires_confirmation {
-            if let Some(ctx) = interrupt {
-                let decision = ctx
-                    .handler
-                    .handle_interrupt(
-                        InterruptReason::ToolConfirmation {
-                            tool: tool_call.tool_name.clone(),
-                            params: tool_call.arguments.clone(),
-                        },
-                        ctx.user_id,
-                        ctx.session_id,
-                    )
-                    .await?;
+            let reason = tool
+                .confirm(&args)
+                .map_err(|e| ArcError::Tool {
+                    tool: tool_call.tool_name.clone(),
+                    message: e.to_string(),
+                })?;
 
-                match decision {
-                    InterruptDecision::Continue | InterruptDecision::Retry => {
-                        tool_call.arguments.clone()
+            if let Some(reason) = reason {
+                if let Some(ref ctx) = interrupt {
+                    let decision = ctx
+                        .handler
+                        .handle_interrupt(
+                            InterruptReason::ToolConfirm {
+                                tool: tool_call.tool_name.clone(),
+                                params: args.clone(),
+                                reason: Some(reason),
+                            },
+                            ctx.user_id,
+                            ctx.session_id,
+                        )
+                        .await?;
+
+                    match decision {
+                        InterruptDecision::Continue | InterruptDecision::Retry => break,
+                        InterruptDecision::ModifyAndContinue(new_args) => {
+                            tracing::info!(
+                                tool = %tool_call.tool_name,
+                                "user modified tool arguments"
+                            );
+                            args = new_args;
+                        }
+                        InterruptDecision::Abort => {
+                            return Err(ArcError::Tool {
+                                tool: tool_call.tool_name.clone(),
+                                message: "execution aborted by user".into(),
+                            });
+                        }
                     }
-                    InterruptDecision::ModifyAndContinue(new_args) => {
-                        tracing::info!(
-                            tool = %tool_call.tool_name,
-                            "user modified tool arguments"
-                        );
-                        new_args
-                    }
-                    InterruptDecision::Abort => {
-                        return Err(ArcError::Tool {
-                            tool: tool_call.tool_name.clone(),
-                            message: "execution aborted by user".into(),
-                        });
-                    }
+                } else {
+                    tracing::warn!(
+                        tool = %tool_call.tool_name,
+                        reason,
+                        "tool requires confirmation but no interrupt handler configured; proceeding"
+                    );
+                    break;
                 }
             } else {
-                tracing::warn!(
-                    tool = %tool_call.tool_name,
-                    "requires_confirmation is set but no interrupt handler configured; proceeding"
-                );
-                tool_call.arguments.clone()
+                break;
             }
-        } else {
-            tool_call.arguments.clone()
-        };
+        }
 
-        let timeout = tool.metadata().timeout;
+        let timeout = tool.spec().timeout;
         let payload = tokio::time::timeout(timeout, tool.execute(args))
             .await
             .map_err(|_| ArcError::Tool {

@@ -17,6 +17,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio", "chrono", "uuid"] }
 reqwest = { version = "0.13", features = ["stream"] }
+shell-words = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

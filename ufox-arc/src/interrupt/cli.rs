@@ -63,9 +63,17 @@ impl InterruptHandler for AutoApproveHandler {
 fn format_prompt(reason: &InterruptReason, user_id: &UserId, session_id: &SessionId) -> String {
     let header = format!("[HITL] user={} session={}", user_id, session_id);
     let body = match reason {
-        InterruptReason::ToolConfirmation { tool, params } => {
+        InterruptReason::ToolConfirm {
+            tool,
+            params,
+            reason,
+        } => {
+            let reason_line = reason
+                .as_deref()
+                .map(|reason| format!("\n  reason  : {reason}"))
+                .unwrap_or_default();
             format!(
-                "Tool confirmation required\n  tool    : {tool}\n  params  : {}",
+                "Tool confirmation required\n  tool    : {tool}\n  params  : {}{reason_line}",
                 serde_json::to_string_pretty(params).unwrap_or_default()
             )
         }
@@ -138,9 +146,10 @@ mod tests {
         let session_id = SessionId("s1".into());
         let decision = handler
             .handle_interrupt(
-                InterruptReason::ToolConfirmation {
+                InterruptReason::ToolConfirm {
                     tool: "shell".into(),
                     params: serde_json::json!({"command": "rm -rf /"}),
+                    reason: Some("命令包含高风险删除操作".into()),
                 },
                 &user_id,
                 &session_id,

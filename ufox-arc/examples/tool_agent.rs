@@ -2,7 +2,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use ufox_arc::tools::{Tool, ToolError, ToolMetadata};
+use ufox_arc::tools::{Tool, ToolError, ToolSpec};
 use ufox_arc::{Agent, ArcError, FileReadTool};
 use ufox_llm::{Client, ToolResultPayload};
 
@@ -11,9 +11,9 @@ struct WeatherTool;
 
 #[async_trait]
 impl Tool for WeatherTool {
-    fn metadata(&self) -> &ToolMetadata {
-        static META: std::sync::OnceLock<ToolMetadata> = std::sync::OnceLock::new();
-        META.get_or_init(|| ToolMetadata {
+    fn spec(&self) -> &ToolSpec {
+        static META: std::sync::OnceLock<ToolSpec> = std::sync::OnceLock::new();
+        META.get_or_init(|| ToolSpec {
             name: "get_weather".to_string(),
             description: "Get current weather for a city.".to_string(),
             parameters_schema: json!({
@@ -26,7 +26,6 @@ impl Tool for WeatherTool {
                 },
                 "required": ["city"]
             }),
-            requires_confirmation: false,
             timeout: std::time::Duration::from_secs(5),
         })
     }

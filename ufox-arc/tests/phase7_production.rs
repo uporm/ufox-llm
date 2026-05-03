@@ -1,9 +1,14 @@
 /// Phase 7 集成测试：工具调用循环、HITL、超时、MaxIterations、Session 持久化。
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use ufox_arc::tools::{Tool, ToolError, ToolMetadata};
+use ufox_arc::interrupt::{InterruptDecision, InterruptHandler, InterruptReason};
+use ufox_arc::tools::{Confirm, Tool, ToolError, ToolSpec};
 use ufox_arc::{
     Agent, AgentConfig, ArcError, AutoApproveHandler, ExecutionState, InMemorySessionStore,
     SessionStore, StepKind,
@@ -77,9 +82,9 @@ struct EchoTool;
 
 #[async_trait]
 impl Tool for EchoTool {
-    fn metadata(&self) -> &ToolMetadata {
-        static META: std::sync::OnceLock<ToolMetadata> = std::sync::OnceLock::new();
-        META.get_or_init(|| ToolMetadata {
+    fn spec(&self) -> &ToolSpec {
+        static META: std::sync::OnceLock<ToolSpec> = std::sync::OnceLock::new();
+        META.get_or_init(|| ToolSpec {
             name: "echo".into(),
             description: "Echo the input text.".into(),
             parameters_schema: serde_json::json!({
@@ -87,7 +92,6 @@ impl Tool for EchoTool {
                 "properties": { "text": { "type": "string" } },
                 "required": ["text"]
             }),
-            requires_confirmation: false,
             timeout: Duration::from_secs(5),
         })
     }
@@ -104,9 +108,9 @@ struct ConfirmedTool;
 
 #[async_trait]
 impl Tool for ConfirmedTool {
-    fn metadata(&self) -> &ToolMetadata {
-        static META: std::sync::OnceLock<ToolMetadata> = std::sync::OnceLock::new();
-        META.get_or_init(|| ToolMetadata {
+    fn spec(&self) -> &ToolSpec {
+        static META: std::sync::OnceLock<ToolSpec> = std::sync::OnceLock::new();
+        META.get_or_init(|| ToolSpec {
             name: "confirmed_op".into(),
             description: "An operation that requires confirmation.".into(),
             parameters_schema: serde_json::json!({
@@ -114,14 +118,77 @@ impl Tool for ConfirmedTool {
                 "properties": { "value": { "type": "string" } },
                 "required": ["value"]
             }),
-            requires_confirmation: true,
             timeout: Duration::from_secs(5),
         })
+    }
+
+    fn confirm(&self, _params: &Value) -> Confirm {
+        Ok(Some("该工具显式要求人工确认".into()))
     }
 
     async fn execute(&self, params: Value) -> Result<ToolResultPayload, ToolError> {
         let value = params["value"].as_str().unwrap_or("").to_string();
         Ok(ToolResultPayload::text(format!("confirmed: {value}")))
+    }
+}
+
+struct ConditionalTool;
+
+#[async_trait]
+impl Tool for ConditionalTool {
+    fn spec(&self) -> &ToolSpec {
+        static META: std::sync::OnceLock<ToolSpec> = std::sync::OnceLock::new();
+        META.get_or_init(|| ToolSpec {
+            name: "conditional_op".into(),
+            description: "Conditionally requires confirmation.".into(),
+            parameters_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "mode": { "type": "string" } },
+                "required": ["mode"]
+            }),
+            timeout: Duration::from_secs(5),
+        })
+    }
+
+    fn confirm(&self, params: &Value) -> Confirm {
+        let mode = params["mode"].as_str().ok_or_else(|| ToolError::InvalidParams {
+            tool: "conditional_op".into(),
+            message: "missing 'mode' parameter".into(),
+        })?;
+
+        Ok(match mode {
+            "safe" => None,
+            "dangerous" => Some("mode=dangerous 会触发保护确认".into()),
+            _ => Some("未知模式需要人工确认".into()),
+        })
+    }
+
+    async fn execute(&self, params: Value) -> Result<ToolResultPayload, ToolError> {
+        let mode = params["mode"].as_str().unwrap_or("").to_string();
+        Ok(ToolResultPayload::text(format!("conditional: {mode}")))
+    }
+}
+
+#[derive(Clone)]
+struct CountingInterruptHandler {
+    count: Arc<AtomicUsize>,
+    modify_to_safe: bool,
+}
+
+#[async_trait]
+impl InterruptHandler for CountingInterruptHandler {
+    async fn handle_interrupt(
+        &self,
+        _reason: InterruptReason,
+        _user_id: &ufox_arc::UserId,
+        _session_id: &ufox_arc::SessionId,
+    ) -> Result<InterruptDecision, ArcError> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        Ok(if self.modify_to_safe {
+            InterruptDecision::ModifyAndContinue(serde_json::json!({ "mode": "safe" }))
+        } else {
+            InterruptDecision::Continue
+        })
     }
 }
 
@@ -223,6 +290,108 @@ async fn hitl_auto_approve_allows_confirmed_tool() {
 
     assert!(matches!(result.trace.state, ExecutionState::Completed));
     assert!(result.response.text.contains("确认"));
+}
+
+/// 动态确认策略：安全参数不触发 HITL。
+#[tokio::test]
+async fn dynamic_confirmation_policy_skips_hitl_for_safe_args() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(tool_call_response(
+            "conditional_op",
+            serde_json::json!({"mode": "safe"}),
+        )))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(text_response("安全模式执行完成：conditional: safe")),
+        )
+        .mount(&server)
+        .await;
+
+    let count = Arc::new(AtomicUsize::new(0));
+    let agent = Agent::builder()
+        .llm(
+            ufox_llm::Client::builder()
+                .provider(Provider::Compatible)
+                .api_key("test-key")
+                .base_url(server.uri())
+                .model("test-model")
+                .build()
+                .unwrap(),
+        )
+        .tool(ConditionalTool)
+        .interrupt_handler(CountingInterruptHandler {
+            count: count.clone(),
+            modify_to_safe: false,
+        })
+        .build()
+        .unwrap();
+
+    let mut session = agent.session("user1", "conditional-safe").await.unwrap();
+    let result = session.chat("执行安全模式").await.unwrap();
+
+    assert!(matches!(result.trace.state, ExecutionState::Completed));
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    assert!(result.response.text.contains("conditional: safe"));
+}
+
+/// 动态确认策略：危险参数会触发 HITL，且改参后会重新评估策略。
+#[tokio::test]
+async fn dynamic_confirmation_policy_rechecks_after_modify() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(tool_call_response(
+            "conditional_op",
+            serde_json::json!({"mode": "dangerous"}),
+        )))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(text_response("参数已改为安全模式：conditional: safe")),
+        )
+        .mount(&server)
+        .await;
+
+    let count = Arc::new(AtomicUsize::new(0));
+    let agent = Agent::builder()
+        .llm(
+            ufox_llm::Client::builder()
+                .provider(Provider::Compatible)
+                .api_key("test-key")
+                .base_url(server.uri())
+                .model("test-model")
+                .build()
+                .unwrap(),
+        )
+        .tool(ConditionalTool)
+        .interrupt_handler(CountingInterruptHandler {
+            count: count.clone(),
+            modify_to_safe: true,
+        })
+        .build()
+        .unwrap();
+
+    let mut session = agent.session("user1", "conditional-modify").await.unwrap();
+    let result = session.chat("执行危险模式").await.unwrap();
+
+    assert!(matches!(result.trace.state, ExecutionState::Completed));
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert!(result.response.text.contains("conditional: safe"));
 }
 
 /// MaxIterations：超过最大迭代次数时返回 ArcError::MaxIterations。

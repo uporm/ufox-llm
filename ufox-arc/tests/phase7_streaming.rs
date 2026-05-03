@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
-use ufox_arc::tools::{Tool, ToolError, ToolMetadata};
+use ufox_arc::tools::{Tool, ToolError, ToolSpec};
 use ufox_arc::{Agent, ArcError, ExecutionState};
 use ufox_llm::{Provider, ToolResultPayload};
 use wiremock::matchers::{method, path};
@@ -50,9 +50,9 @@ struct EchoTool;
 
 #[async_trait]
 impl Tool for EchoTool {
-    fn metadata(&self) -> &ToolMetadata {
-        static META: std::sync::OnceLock<ToolMetadata> = std::sync::OnceLock::new();
-        META.get_or_init(|| ToolMetadata {
+    fn spec(&self) -> &ToolSpec {
+        static META: std::sync::OnceLock<ToolSpec> = std::sync::OnceLock::new();
+        META.get_or_init(|| ToolSpec {
             name: "echo".into(),
             description: "Echo the input text.".into(),
             parameters_schema: serde_json::json!({
@@ -60,7 +60,6 @@ impl Tool for EchoTool {
                 "properties": { "text": { "type": "string" } },
                 "required": ["text"]
             }),
-            requires_confirmation: false,
             timeout: Duration::from_secs(5),
         })
     }
@@ -159,10 +158,10 @@ async fn stream_tool_call_emits_act_step_and_completes() {
 
     while let Some(event) = stream.next().await {
         let event = event.unwrap();
-        if let Some(step) = &event.step {
-            if matches!(step.kind, ufox_arc::StepKind::Act) {
-                saw_act_step = true;
-            }
+        if let Some(step) = &event.step
+            && matches!(step.kind, ufox_arc::StepKind::Act)
+        {
+            saw_act_step = true;
         }
         if matches!(event.state_change, Some(ExecutionState::Completed)) {
             completed = true;
