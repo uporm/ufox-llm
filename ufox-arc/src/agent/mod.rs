@@ -12,7 +12,6 @@ use ufox_llm::Client;
 use crate::error::ArcError;
 use crate::interrupt::InterruptHandler;
 use crate::memory::MemoryStore;
-use crate::ratelimit::RateLimiter;
 use crate::session::{Session, SessionId, UserId};
 use crate::tools::{Tool, ToolRegistry};
 
@@ -26,7 +25,6 @@ pub struct Agent {
     pub(crate) tools: Option<Arc<ToolRegistry>>,
     pub(crate) memory: Option<Arc<dyn MemoryStore>>,
     pub(crate) interrupt_handler: Option<Arc<dyn InterruptHandler>>,
-    pub(crate) rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl Agent {
@@ -65,7 +63,6 @@ pub struct AgentBuilder {
     tools: Vec<Arc<dyn Tool>>,
     memory: Option<Arc<dyn MemoryStore>>,
     interrupt_handler: Option<Arc<dyn InterruptHandler>>,
-    rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl AgentBuilder {
@@ -120,12 +117,6 @@ impl AgentBuilder {
         self
     }
 
-    /// 设置 LLM 调用速率限制（每秒请求数）。
-    pub fn rate_limit(mut self, requests_per_second: f64) -> Self {
-        self.rate_limiter = Some(Arc::new(RateLimiter::new(requests_per_second)));
-        self
-    }
-
     pub fn build(self) -> Result<Agent, ArcError> {
         let llm = self
             .llm
@@ -168,7 +159,6 @@ impl AgentBuilder {
             tools,
             memory: self.memory,
             interrupt_handler: self.interrupt_handler,
-            rate_limiter: self.rate_limiter,
         })
     }
 }

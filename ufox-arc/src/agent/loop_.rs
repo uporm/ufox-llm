@@ -10,7 +10,6 @@ use crate::agent::step::{ExecutionState, ExecutionStep, StepInput, StepKind, Ste
 use crate::error::ArcError;
 use crate::interrupt::{InterruptCtx, InterruptHandler};
 use crate::memory::{MemoryStore, strategy};
-use crate::ratelimit::RateLimiter;
 use crate::session::{SessionId, UserId};
 use crate::tools::ToolRegistry;
 
@@ -29,7 +28,6 @@ pub(crate) struct LoopCtx<'a> {
     pub tools: Option<&'a ToolRegistry>,
     pub memory: Option<MemoryCtx<'a>>,
     pub interrupt: Option<(&'a dyn InterruptHandler, &'a UserId, &'a SessionId)>,
-    pub rate_limiter: Option<&'a RateLimiter>,
 }
 
 /// `run_loop` 的内部返回值；不暴露给公开 API。
@@ -60,7 +58,6 @@ pub(crate) async fn run_loop(
         tools,
         memory,
         interrupt,
-        rate_limiter,
     } = ctx;
     let deadline = Instant::now() + config.timeout;
     let mut steps: Vec<ExecutionStep> = Vec::new();
@@ -123,10 +120,7 @@ pub(crate) async fn run_loop(
             return Err(ArcError::Timeout(config.timeout));
         }
 
-        // Think：调用 LLM（先过 rate limiter）
-        if let Some(rl) = rate_limiter {
-            rl.acquire().await;
-        }
+        // Think：调用 LLM
         tracing::debug!(iteration, "think: calling LLM");
         let think_start = Instant::now();
         let req = build_request(system, messages, config, tools);
@@ -171,7 +165,7 @@ pub(crate) async fn run_loop(
         messages.push(response.clone().into_message());
 
         if !has_tool_calls {
-            tracing::info!(
+            tracing::debug!(
                 iteration,
                 total_tokens = total_usage.total_tokens,
                 "agent: completed"

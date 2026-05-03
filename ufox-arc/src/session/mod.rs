@@ -333,7 +333,6 @@ impl Session {
                     .interrupt_handler
                     .as_deref()
                     .map(|h| (h, &self.user_id, &self.session_id)),
-                rate_limiter: agent.rate_limiter.as_deref(),
             },
             &mut messages,
         )
@@ -519,11 +518,6 @@ async fn run_streaming_loop(
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(ArcError::Timeout(config.timeout));
-        }
-
-        // Rate limit
-        if let Some(rl) = agent.rate_limiter.as_deref() {
-            rl.acquire().await;
         }
 
         // Build request from current history (lock then release before streaming)

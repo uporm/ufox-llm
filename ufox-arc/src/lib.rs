@@ -4,7 +4,6 @@ pub mod error;
 pub mod interrupt;
 pub mod memory;
 pub mod multimodal;
-pub mod ratelimit;
 pub mod session;
 pub mod tools;
 
@@ -18,7 +17,6 @@ pub use interrupt::{
 };
 pub use memory::{InMemoryStore, MemoryFilter, MemoryId, MemoryScope, MemoryStore, SqliteMemory};
 pub use multimodal::{DefaultExtractor, ExtractedContent, MediaExtractor, MediaRef, Modality};
-pub use ratelimit::RateLimiter;
 pub use session::{
     ExecutionEvent, ExecutionEventStream, ExecutionResult, ExecutionTrace, InMemorySessionStore,
     Session, SessionId, SessionInput, SessionStore, SqliteSessionStore, UserId,
