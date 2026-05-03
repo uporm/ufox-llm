@@ -140,7 +140,7 @@ impl AgentBuilder {
             None
         } else {
             let mut manager = ToolManager::new();
-            manager.register(self.tools)?;
+            manager.register(self.tools);
             Some(Arc::new(manager))
         };
 

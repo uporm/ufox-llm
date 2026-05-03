@@ -151,10 +151,12 @@ impl Tool for ConditionalTool {
     }
 
     fn confirm(&self, params: &Value) -> Confirm {
-        let mode = params["mode"].as_str().ok_or_else(|| ToolError::InvalidParams {
-            tool: "conditional_op".into(),
-            message: "missing 'mode' parameter".into(),
-        })?;
+        let mode = params["mode"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidParams {
+                tool: "conditional_op".into(),
+                message: "missing 'mode' parameter".into(),
+            })?;
 
         Ok(match mode {
             "safe" => None,

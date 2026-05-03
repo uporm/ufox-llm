@@ -5,8 +5,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use ufox_llm::ToolResultPayload;
 
-use crate::tools::result::ToolError;
-use crate::tools::{Confirm, Tool, ToolSpec};
+use crate::tools::{Confirm, Tool, ToolError, ToolSpec};
 
 /// 以文本模式读取指定路径文件。
 pub struct FileReadTool {
@@ -36,6 +35,7 @@ impl Default for FileReadTool {
 }
 
 impl FileReadTool {
+    /// 创建文件读取工具。
     pub fn new() -> Self {
         Self::default()
     }
@@ -99,6 +99,7 @@ impl Default for FileWriteTool {
 }
 
 impl FileWriteTool {
+    /// 创建文件写入工具。
     pub fn new() -> Self {
         Self::default()
     }
