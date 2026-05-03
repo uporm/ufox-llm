@@ -1,6 +1,8 @@
+pub mod media;
 pub mod session_store;
 pub mod store;
 
+pub use media::{MediaRef, Modality};
 pub use session_store::{InMemorySessionStore, SqliteSessionStore};
 pub use store::SessionStore;
 
@@ -12,12 +14,12 @@ use async_stream::stream;
 use futures::{Stream, StreamExt};
 use ufox_llm::{ChatResponse, ContentPart, FinishReason, Message, Role, ToolCall, Usage};
 
+use self::media::{DefaultExtractor, MediaExtractor};
 use crate::agent::Agent;
 use crate::agent::loop_::{LoopCtx, LoopResult, MemoryCtx, build_request, execute_tools, run_loop};
 use crate::agent::step::{ExecutionState, ExecutionStep, StepInput, StepKind, StepOutput};
 use crate::error::ArcError;
 use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryScope, strategy};
-use crate::multimodal::{DefaultExtractor, MediaExtractor, MediaRef, Modality};
 use ufox_llm::MediaSource;
 
 /// 用户的唯一标识，用于跨会话记忆归属。

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::ArcError;
 
-/// 媒体模态类型。
+/// 会话可附加的媒体模态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Modality {
@@ -19,21 +19,12 @@ pub enum Modality {
     Document,
 }
 
-/// 从原始来源提取后的内容，包含 LLM 可消费的 `ContentPart` 列表与来源元信息。
-#[derive(Debug, Clone)]
-pub struct ExtractedContent {
-    pub modality: Modality,
-    pub parts: Vec<ContentPart>,
-    pub source: MediaSource,
-    /// 任意来源元信息（文件路径、页码范围、时间片等）。
-    pub metadata: HashMap<String, serde_json::Value>,
-}
-
 /// 已附加媒体在会话中的唯一引用。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MediaRef(pub Uuid);
 
 impl MediaRef {
+    /// 生成新的媒体引用。
     pub fn new() -> Self {
         MediaRef(Uuid::new_v4())
     }
@@ -45,9 +36,16 @@ impl Default for MediaRef {
     }
 }
 
-/// 将 `MediaSource` 提取为可供 LLM 消费的 `ContentPart` 列表。
+/// 提取后的内容需要保留来源元信息，后续会写入 session memory 以支撑追问。
+#[derive(Debug, Clone)]
+pub(crate) struct ExtractedContent {
+    pub parts: Vec<ContentPart>,
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// 提取器只服务于会话输入链路，因此保持 crate 内部可见，避免过早暴露扩展面。
 #[async_trait]
-pub trait MediaExtractor: Send + Sync {
+pub(crate) trait MediaExtractor: Send + Sync {
     async fn extract(
         &self,
         source: MediaSource,
@@ -57,9 +55,9 @@ pub trait MediaExtractor: Send + Sync {
 
 /// 默认提取器：按模态路由。
 ///
-/// - Image/Audio/Video：直接封装为对应 ContentPart，不读取二进制数据。
-/// - Text/Document：读取文件内容为 UTF-8 字符串，再封装为 ContentPart::Text。
-pub struct DefaultExtractor;
+/// - Image/Audio/Video：直接封装为对应 `ContentPart`，避免在接入层读取大块二进制。
+/// - Text/Document：读取文本内容后转成 `ContentPart::Text`，让推理链路统一消费。
+pub(crate) struct DefaultExtractor;
 
 #[async_trait]
 impl MediaExtractor for DefaultExtractor {
@@ -70,7 +68,6 @@ impl MediaExtractor for DefaultExtractor {
     ) -> Result<ExtractedContent, ArcError> {
         let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
 
-        // 将来源信息写入 metadata
         match &source {
             MediaSource::File { path } => {
                 metadata.insert(
@@ -94,30 +91,22 @@ impl MediaExtractor for DefaultExtractor {
                 source: source.clone(),
                 fidelity: None,
             })],
-
             Modality::Audio => vec![ContentPart::Audio(Audio {
                 format: guess_audio_format(&source),
                 source: source.clone(),
             })],
-
             Modality::Video => vec![ContentPart::Video(Video {
                 format: guess_video_format(&source),
                 source: source.clone(),
                 sample_frames: None,
             })],
-
             Modality::Text | Modality::Document => {
                 let text = read_as_text(&source).await?;
                 vec![ContentPart::text(text)]
             }
         };
 
-        Ok(ExtractedContent {
-            modality,
-            parts,
-            source,
-            metadata,
-        })
+        Ok(ExtractedContent { parts, metadata })
     }
 }
 
@@ -126,7 +115,6 @@ async fn read_as_text(source: &MediaSource) -> Result<String, ArcError> {
         MediaSource::File { path } => tokio::fs::read_to_string(path)
             .await
             .map_err(|e| ArcError::Session(format!("failed to read {}: {e}", path.display()))),
-
         MediaSource::Url { url } => {
             let text = reqwest::get(url.as_str())
                 .await
@@ -140,7 +128,6 @@ async fn read_as_text(source: &MediaSource) -> Result<String, ArcError> {
                 .map_err(|e| ArcError::Session(format!("read document URL '{url}' body: {e}")))?;
             Ok(text)
         }
-
         MediaSource::Base64 { mime_type, .. } => Err(ArcError::Session(format!(
             "base64 text extraction not supported for mime_type '{mime_type}'; provide a File or URL source"
         ))),
@@ -195,7 +182,6 @@ mod tests {
             url: "https://example.com/photo.jpg".into(),
         };
         let result = extractor.extract(source, Modality::Image).await.unwrap();
-        assert_eq!(result.modality, Modality::Image);
         assert_eq!(result.parts.len(), 1);
         assert!(matches!(result.parts[0], ContentPart::Image(_)));
     }
@@ -210,7 +196,6 @@ mod tests {
             path: tmp.path().to_path_buf(),
         };
         let result = extractor.extract(source, Modality::Text).await.unwrap();
-        assert_eq!(result.modality, Modality::Text);
         assert_eq!(result.parts.len(), 1);
         if let ContentPart::Text(t) = &result.parts[0] {
             assert!(t.text.contains("Hello, multimodal!"));
@@ -268,7 +253,6 @@ mod tests {
         let extractor = DefaultExtractor;
         let source = MediaSource::Url { url };
         let result = extractor.extract(source, Modality::Document).await.unwrap();
-        assert_eq!(result.modality, Modality::Document);
         if let ContentPart::Text(t) = &result.parts[0] {
             assert!(t.text.contains("fetched document content"));
         } else {

@@ -3,7 +3,6 @@ pub mod agent;
 pub mod error;
 pub mod interrupt;
 pub mod memory;
-pub mod multimodal;
 pub mod session;
 pub mod tools;
 
@@ -16,10 +15,9 @@ pub use interrupt::{
     AutoApproveHandler, CliInterruptHandler, InterruptDecision, InterruptHandler, InterruptReason,
 };
 pub use memory::{InMemoryStore, MemoryFilter, MemoryId, MemoryScope, MemoryStore, SqliteMemory};
-pub use multimodal::{DefaultExtractor, ExtractedContent, MediaExtractor, MediaRef, Modality};
 pub use session::{
     ExecutionEvent, ExecutionEventStream, ExecutionResult, ExecutionTrace, InMemorySessionStore,
-    Session, SessionId, SessionInput, SessionStore, SqliteSessionStore, UserId,
+    MediaRef, Modality, Session, SessionId, SessionInput, SessionStore, SqliteSessionStore, UserId,
 };
 pub use tools::{
     Tool, ToolError, ToolMetadata, ToolRegistry,
