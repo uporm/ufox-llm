@@ -16,7 +16,7 @@ fn make_agent(base_url: &str) -> Agent {
                 .build()
                 .unwrap(),
         )
-        .system("你是测试助手。")
+        .instructions("你是测试助手。")
         .build()
         .unwrap()
 }
@@ -51,9 +51,9 @@ async fn chat_returns_execution_trace_with_steps() {
         .await;
 
     let agent = make_agent(&server.uri());
-    let mut session = agent.session("user_test", "trace-test").await.unwrap();
+    let thread = agent.thread("user_test", "trace-test");
 
-    let result = session.chat("解释所有权").await.unwrap();
+    let result = agent.run(&thread, "解释所有权").await.unwrap();
 
     assert!(!result.response.text.is_empty());
     assert!(matches!(result.trace.state, ExecutionState::Completed));
@@ -84,10 +84,10 @@ async fn multi_turn_chat_accumulates_history() {
         .await;
 
     let agent = make_agent(&server.uri());
-    let mut session = agent.session("user_test", "multi-turn").await.unwrap();
+    let thread = agent.thread("user_test", "multi-turn");
 
-    let r1 = session.chat("第一轮消息").await.unwrap();
-    let r2 = session.chat("第二轮消息").await.unwrap();
+    let r1 = agent.run(&thread, "第一轮消息").await.unwrap();
+    let r2 = agent.run(&thread, "第二轮消息").await.unwrap();
 
     assert!(!r1.response.text.is_empty());
     assert!(!r2.response.text.is_empty());

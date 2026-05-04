@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use crate::error::ArcError;
 use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryScope, MemoryStore};
-use crate::session::{SessionId, UserId};
+use crate::thread::{ThreadId, UserId};
 
 /// SQLite 持久化后端；使用 WAL 模式提升并发读性能。
 pub struct SqliteMemory {
@@ -64,7 +64,7 @@ impl SqliteMemory {
 
     fn scope_to_row(scope: &MemoryScope) -> (&'static str, String) {
         match scope {
-            MemoryScope::Session { session_id } => ("session", session_id.0.clone()),
+            MemoryScope::Thread { thread_id } => ("thread", thread_id.0.clone()),
             MemoryScope::User { user_id } => ("user", user_id.0.clone()),
         }
     }
@@ -74,8 +74,8 @@ impl SqliteMemory {
             "user" => MemoryScope::User {
                 user_id: UserId(id.to_string()),
             },
-            _ => MemoryScope::Session {
-                session_id: SessionId(id.to_string()),
+            _ => MemoryScope::Thread {
+                thread_id: ThreadId(id.to_string()),
             },
         }
     }
@@ -121,7 +121,7 @@ impl MemoryStore for SqliteMemory {
             let (kind, _) = Self::scope_to_row(scope);
             conditions.push(format!("scope_kind = '{kind}'"));
             let id = match scope {
-                MemoryScope::Session { session_id } => &session_id.0,
+                MemoryScope::Thread { thread_id } => &thread_id.0,
                 MemoryScope::User { user_id } => &user_id.0,
             };
             conditions.push(format!("scope_id = '{}'", id.replace('\'', "''")));
@@ -247,19 +247,19 @@ impl MemoryRow {
 mod tests {
     use super::*;
     use crate::memory::Memory;
-    use crate::session::{SessionId, UserId};
+    use crate::thread::{ThreadId, UserId};
 
     #[tokio::test]
     async fn sqlite_insert_find_remove() {
         let store = SqliteMemory::in_memory().await.unwrap();
 
-        let m = Memory::new_session(SessionId("s1".into()), "sqlite test");
+        let m = Memory::new_thread(ThreadId("s1".into()), "sqlite test");
         let id = store.insert(m.clone()).await.unwrap();
 
         let hits = store
             .find(MemoryFilter {
-                scope: Some(MemoryScope::Session {
-                    session_id: SessionId("s1".into()),
+                scope: Some(MemoryScope::Thread {
+                    thread_id: ThreadId("s1".into()),
                 }),
                 ..Default::default()
             })
@@ -291,21 +291,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_cross_session_scope_isolation() {
+    async fn sqlite_cross_thread_scope_isolation() {
         let store = SqliteMemory::in_memory().await.unwrap();
         store
-            .insert(Memory::new_session(SessionId("s1".into()), "s1 data"))
+            .insert(Memory::new_thread(ThreadId("s1".into()), "s1 data"))
             .await
             .unwrap();
         store
-            .insert(Memory::new_session(SessionId("s2".into()), "s2 data"))
+            .insert(Memory::new_thread(ThreadId("s2".into()), "s2 data"))
             .await
             .unwrap();
 
         let hits = store
             .find(MemoryFilter {
-                scope: Some(MemoryScope::Session {
-                    session_id: SessionId("s1".into()),
+                scope: Some(MemoryScope::Thread {
+                    thread_id: ThreadId("s1".into()),
                 }),
                 ..Default::default()
             })

@@ -124,7 +124,7 @@ impl ToolManager {
                         reason: Some(reason),
                     },
                     ctx.user_id,
-                    ctx.session_id,
+                    ctx.thread_id,
                 )
                 .await?;
 

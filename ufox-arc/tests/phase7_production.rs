@@ -1,4 +1,4 @@
-/// Phase 7 集成测试：工具调用循环、HITL、超时、MaxIterations、Session 持久化。
+/// Phase 7 集成测试：工具调用循环、HITL、超时、MaxIterations、Thread 持久化。
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -10,8 +10,8 @@ use serde_json::Value;
 use ufox_arc::interrupt::{InterruptDecision, InterruptHandler, InterruptReason};
 use ufox_arc::tools::{Confirm, Tool, ToolError, ToolSpec};
 use ufox_arc::{
-    Agent, AgentConfig, ArcError, AutoApproveHandler, ExecutionState, InMemorySessionStore,
-    SessionStore, StepKind,
+    Agent, AgentConfig, ArcError, AutoApproveHandler, ExecutionState, InMemoryThreadStore,
+    StepKind, ThreadId, ThreadStore, UserId,
 };
 use ufox_llm::{Provider, ToolResultPayload};
 use wiremock::matchers::{method, path};
@@ -30,7 +30,7 @@ fn make_agent(base_url: &str) -> Agent {
                 .build()
                 .unwrap(),
         )
-        .system("你是测试助手。")
+        .instructions("你是测试助手。")
         .build()
         .unwrap()
 }
@@ -182,8 +182,8 @@ impl InterruptHandler for CountingInterruptHandler {
     async fn handle_interrupt(
         &self,
         _reason: InterruptReason,
-        _user_id: &ufox_arc::UserId,
-        _session_id: &ufox_arc::SessionId,
+        _user_id: &UserId,
+        _thread_id: &ThreadId,
     ) -> Result<InterruptDecision, ArcError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         Ok(if self.modify_to_safe {
@@ -232,13 +232,13 @@ async fn tool_call_loop_executes_and_returns_final_response() {
                 .build()
                 .unwrap(),
         )
-        .system("你是测试助手。")
+        .instructions("你是测试助手。")
         .tool(EchoTool)
         .build()
         .unwrap();
 
-    let mut session = agent.session("user1", "tool-loop").await.unwrap();
-    let result = session.chat("请调用 echo 工具").await.unwrap();
+    let thread = agent.thread("user1", "tool-loop");
+    let result = agent.run(&thread, "请调用 echo 工具").await.unwrap();
 
     assert!(matches!(result.trace.state, ExecutionState::Completed));
     let kinds: Vec<_> = result.trace.steps.iter().map(|s| &s.kind).collect();
@@ -287,8 +287,8 @@ async fn hitl_auto_approve_allows_confirmed_tool() {
         .build()
         .unwrap();
 
-    let mut session = agent.session("user1", "hitl-auto").await.unwrap();
-    let result = session.chat("执行受保护操作").await.unwrap();
+    let thread = agent.thread("user1", "hitl-auto");
+    let result = agent.run(&thread, "执行受保护操作").await.unwrap();
 
     assert!(matches!(result.trace.state, ExecutionState::Completed));
     assert!(result.response.text.contains("确认"));
@@ -337,8 +337,8 @@ async fn dynamic_confirmation_policy_skips_hitl_for_safe_args() {
         .build()
         .unwrap();
 
-    let mut session = agent.session("user1", "conditional-safe").await.unwrap();
-    let result = session.chat("执行安全模式").await.unwrap();
+    let thread = agent.thread("user1", "conditional-safe");
+    let result = agent.run(&thread, "执行安全模式").await.unwrap();
 
     assert!(matches!(result.trace.state, ExecutionState::Completed));
     assert_eq!(count.load(Ordering::SeqCst), 0);
@@ -388,8 +388,8 @@ async fn dynamic_confirmation_policy_rechecks_after_modify() {
         .build()
         .unwrap();
 
-    let mut session = agent.session("user1", "conditional-modify").await.unwrap();
-    let result = session.chat("执行危险模式").await.unwrap();
+    let thread = agent.thread("user1", "conditional-modify");
+    let result = agent.run(&thread, "执行危险模式").await.unwrap();
 
     assert!(matches!(result.trace.state, ExecutionState::Completed));
     assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -426,8 +426,8 @@ async fn max_iterations_returns_error() {
         .build()
         .unwrap();
 
-    let mut session = agent.session("user1", "max-iter").await.unwrap();
-    let err = session.chat("一直调用工具").await.unwrap_err();
+    let thread = agent.thread("user1", "max-iter");
+    let err = agent.run(&thread, "一直调用工具").await.unwrap_err();
 
     assert!(matches!(err, ArcError::MaxIterations(3)));
 }
@@ -464,15 +464,15 @@ async fn timeout_returns_error() {
         .build()
         .unwrap();
 
-    let mut session = agent.session("user1", "timeout").await.unwrap();
-    let err = session.chat("slow request").await.unwrap_err();
+    let thread = agent.thread("user1", "timeout");
+    let err = agent.run(&thread, "slow request").await.unwrap_err();
 
     assert!(matches!(err, ArcError::Timeout(_)));
 }
 
-/// SessionBusy：同一会话发起并发写时，第二个立即返回 SessionBusy。
+/// ThreadBusy：同一线程发起并发写时，第二个立即返回 ThreadBusy。
 #[tokio::test]
-async fn concurrent_chat_returns_session_busy() {
+async fn concurrent_chat_returns_thread_busy() {
     let server = MockServer::start().await;
 
     // 第一个请求故意延迟，让第二个并发请求先检查到 Running 状态
@@ -487,27 +487,27 @@ async fn concurrent_chat_returns_session_busy() {
         .await;
 
     let agent = make_agent(&server.uri());
-    let mut s1 = agent.session("user1", "busy-test").await.unwrap();
-    // Clone 共享同一内部状态
-    let mut s2 = s1.clone();
+    let t1 = agent.thread("user1", "busy-test");
+    let t2 = t1.clone();
+    let agent2 = agent.clone();
 
     // 第一个请求在后台跑
-    let h = tokio::spawn(async move { s1.chat("first").await });
+    let h = tokio::spawn(async move { agent2.run(&t1, "first").await });
 
     // 给第一个请求一点时间进入 Running 状态
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    // 第二个请求应立即返回 SessionBusy
-    let err = s2.chat("second").await.unwrap_err();
-    assert!(matches!(err, ArcError::SessionBusy));
+    // 第二个请求应立即返回 ThreadBusy
+    let err = agent.run(&t2, "second").await.unwrap_err();
+    assert!(matches!(err, ArcError::ThreadBusy));
 
     // 等第一个完成
     let _ = h.await.unwrap();
 }
 
-/// Session 持久化：保存、恢复、确认历史完整。
+/// Thread 持久化：保存、恢复、确认历史完整。
 #[tokio::test]
-async fn session_persist_and_restore() {
+async fn thread_persist_and_restore() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -516,19 +516,19 @@ async fn session_persist_and_restore() {
         .await;
 
     let agent = make_agent(&server.uri());
-    let store = InMemorySessionStore::default();
+    let store = InMemoryThreadStore::default();
 
-    // 第一次会话
-    let mut session1 = agent.session("user1", "persist-sess").await.unwrap();
-    let _ = session1.chat("你好").await.unwrap();
-    session1.persist(&store).await.unwrap();
+    // 第一次线程
+    let thread1 = agent.thread("user1", "persist-sess");
+    let _ = agent.run(&thread1, "你好").await.unwrap();
+    thread1.save(&store).await.unwrap();
 
-    // 新建会话对象，恢复历史
-    let session2 = agent.session("user1", "persist-sess").await.unwrap();
-    session2.restore(&store).await.unwrap();
+    // 新建线程对象，恢复历史
+    let thread2 = agent.thread("user1", "persist-sess");
+    thread2.load(&store).await.unwrap();
 
     // 验证历史消息数量：1 user + 1 assistant = 2
-    let msgs = store.load(&session2.session_id).await.unwrap();
-    assert_eq!(msgs.len(), 2);
-    assert_eq!(msgs[0].text(), "你好");
+    let snapshot = store.load(&thread2.thread_id).await.unwrap().unwrap();
+    assert_eq!(snapshot.messages.len(), 2);
+    assert_eq!(snapshot.messages[0].text(), "你好");
 }

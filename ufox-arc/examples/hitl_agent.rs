@@ -24,7 +24,7 @@ where
 
     let agent = Agent::builder()
         .llm(llm)
-        .system(
+        .instructions(
             "You are a helpful assistant. When the user asks to run a command, use the shell tool.",
         )
         .config(AgentConfig {
@@ -53,10 +53,10 @@ async fn demo_auto_approve() -> Result<()> {
     println!("=== HITL Demo: AutoApproveHandler (自动批准) ===\n");
 
     let agent = make_agent_with_handler(AutoApproveHandler)?;
-    let mut session = agent.new_session("user-demo").await?;
+    let thread = agent.new_thread("user-demo");
 
-    let result = session
-        .chat("请用 shell 工具执行命令 `echo hello from hitl`")
+    let result = agent
+        .run(&thread, "请用 shell 工具执行命令 `echo hello from hitl`")
         .await?;
 
     println!("响应：{}", result.response.text);
@@ -74,10 +74,10 @@ async fn demo_cli_interrupt() -> Result<()> {
     println!("提示出现时：y=继续  n=中止  m {{\"cmd\":\"echo safe\"}}=修改参数\n");
 
     let agent = make_agent_with_handler(CliInterruptHandler)?;
-    let mut session = agent.new_session("user-cli").await?;
+    let thread = agent.new_thread("user-cli");
 
-    let result = session
-        .chat("请用 shell 工具执行命令 `rm -rf /tmp/test_hitl`")
+    let result = agent
+        .run(&thread, "请用 shell 工具执行命令 `rm -rf /tmp/test_hitl`")
         .await;
 
     match result {

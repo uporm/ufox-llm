@@ -13,7 +13,7 @@ use crate::tools::{Tool, ToolManager};
 #[derive(Default)]
 pub struct AgentBuilder {
     llm: Option<Client>,
-    system: Option<String>,
+    instructions: Option<String>,
     config: Option<AgentConfig>,
     max_iterations: Option<usize>,
     enable_perceive: Option<bool>,
@@ -31,9 +31,9 @@ impl AgentBuilder {
         self
     }
 
-    /// 设置系统提示词。
-    pub fn system(mut self, prompt: impl Into<String>) -> Self {
-        self.system = Some(prompt.into());
+    /// 设置 Agent 指令。
+    pub fn instructions(mut self, prompt: impl Into<String>) -> Self {
+        self.instructions = Some(prompt.into());
         self
     }
 
@@ -117,7 +117,7 @@ impl AgentBuilder {
 
         Ok(Agent {
             llm: Arc::new(llm),
-            system: self.system,
+            instructions: self.instructions,
             config,
             tools,
             memory: self.memory,

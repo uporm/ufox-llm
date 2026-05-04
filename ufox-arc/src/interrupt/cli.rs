@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::error::ArcError;
 use crate::interrupt::{InterruptDecision, InterruptHandler, InterruptReason};
-use crate::session::{SessionId, UserId};
+use crate::thread::{ThreadId, UserId};
 
 /// CLI 版中断处理器：将确认提示打印到 stdout，从 stdin 读取用户决策。
 ///
@@ -21,9 +21,9 @@ impl InterruptHandler for CliInterruptHandler {
         &self,
         reason: InterruptReason,
         user_id: &UserId,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
     ) -> Result<InterruptDecision, ArcError> {
-        let prompt = format_prompt(&reason, user_id, session_id);
+        let prompt = format_prompt(&reason, user_id, thread_id);
 
         let input = tokio::task::spawn_blocking(move || {
             use std::io::{BufRead, Write};
@@ -38,7 +38,7 @@ impl InterruptHandler for CliInterruptHandler {
             line.trim().to_string()
         })
         .await
-        .map_err(|e| ArcError::Session(format!("CLI interrupt handler error: {e}")))?;
+        .map_err(|e| ArcError::Thread(format!("CLI interrupt handler error: {e}")))?;
 
         Ok(parse_decision(&input))
     }
@@ -54,14 +54,14 @@ impl InterruptHandler for AutoApproveHandler {
         &self,
         _reason: InterruptReason,
         _user_id: &UserId,
-        _session_id: &SessionId,
+        _thread_id: &ThreadId,
     ) -> Result<InterruptDecision, ArcError> {
         Ok(InterruptDecision::Continue)
     }
 }
 
-fn format_prompt(reason: &InterruptReason, user_id: &UserId, session_id: &SessionId) -> String {
-    let header = format!("[HITL] user={} session={}", user_id, session_id);
+fn format_prompt(reason: &InterruptReason, user_id: &UserId, thread_id: &ThreadId) -> String {
+    let header = format!("[HITL] user={} thread={}", user_id, thread_id);
     let body = match reason {
         InterruptReason::ToolConfirm {
             tool,
@@ -143,7 +143,7 @@ mod tests {
     async fn auto_approve_always_continues() {
         let handler = AutoApproveHandler;
         let user_id = UserId("u1".into());
-        let session_id = SessionId("s1".into());
+        let thread_id = ThreadId("s1".into());
         let decision = handler
             .handle_interrupt(
                 InterruptReason::ToolConfirm {
@@ -152,7 +152,7 @@ mod tests {
                     reason: Some("命令包含高风险删除操作".into()),
                 },
                 &user_id,
-                &session_id,
+                &thread_id,
             )
             .await
             .unwrap();

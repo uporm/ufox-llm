@@ -104,10 +104,10 @@ impl MemoryStore for InMemoryStore {
 mod tests {
     use super::*;
     use crate::memory::{Memory, MemoryFilter, MemoryScope};
-    use crate::session::{SessionId, UserId};
+    use crate::thread::{ThreadId, UserId};
 
-    fn session_memory(session_id: &str, content: &str) -> Memory {
-        Memory::new_session(SessionId(session_id.to_string()), content)
+    fn thread_memory(thread_id: &str, content: &str) -> Memory {
+        Memory::new_thread(ThreadId(thread_id.to_string()), content)
     }
 
     fn user_memory(user_id: &str, content: &str) -> Memory {
@@ -117,49 +117,49 @@ mod tests {
     #[tokio::test]
     async fn insert_and_find_by_scope() {
         let store = InMemoryStore::new();
-        let m = session_memory("s1", "hello session");
+        let m = thread_memory("s1", "hello thread");
         store.insert(m.clone()).await.unwrap();
 
         let hits = store
             .find(MemoryFilter {
-                scope: Some(MemoryScope::Session {
-                    session_id: SessionId("s1".into()),
+                scope: Some(MemoryScope::Thread {
+                    thread_id: ThreadId("s1".into()),
                 }),
                 ..Default::default()
             })
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].content, "hello session");
+        assert_eq!(hits[0].content, "hello thread");
     }
 
     #[tokio::test]
     async fn scope_isolation() {
         let store = InMemoryStore::new();
         store
-            .insert(session_memory("s1", "session data"))
+            .insert(thread_memory("s1", "thread data"))
             .await
             .unwrap();
         store.insert(user_memory("u1", "user data")).await.unwrap();
 
-        let session_hits = store
+        let thread_hits = store
             .find(MemoryFilter {
-                scope: Some(MemoryScope::Session {
-                    session_id: SessionId("s1".into()),
+                scope: Some(MemoryScope::Thread {
+                    thread_id: ThreadId("s1".into()),
                 }),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(session_hits.len(), 1);
-        assert_eq!(session_hits[0].content, "session data");
+        assert_eq!(thread_hits.len(), 1);
+        assert_eq!(thread_hits[0].content, "thread data");
     }
 
     #[tokio::test]
     async fn filter_by_tags() {
         let store = InMemoryStore::new();
-        let m1 = session_memory("s1", "tagged").with_tags(["rust", "ai"]);
-        let m2 = session_memory("s1", "not tagged");
+        let m1 = thread_memory("s1", "tagged").with_tags(["rust", "ai"]);
+        let m2 = thread_memory("s1", "not tagged");
         store.insert(m1).await.unwrap();
         store.insert(m2).await.unwrap();
 
@@ -177,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn remove_memory() {
         let store = InMemoryStore::new();
-        let m = session_memory("s1", "to be removed");
+        let m = thread_memory("s1", "to be removed");
         let id = store.insert(m).await.unwrap();
 
         store.remove(id).await.unwrap();

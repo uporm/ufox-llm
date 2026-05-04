@@ -1,4 +1,4 @@
-/// Phase 7 流式集成测试：验证 chat_stream() 走完整推理循环。
+/// Phase 7 流式集成测试：验证 run_stream() 走完整推理循环。
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -95,8 +95,8 @@ async fn stream_simple_yields_chunks_and_completed() {
         .build()
         .unwrap();
 
-    let mut session = agent.session("u1", "s1").await.unwrap();
-    let mut stream = session.chat_stream("hi").await.unwrap();
+    let thread = agent.thread("u1", "s1");
+    let mut stream = agent.run_stream(&thread, "hi").await.unwrap();
 
     let mut text_chunks = 0u32;
     let mut completed = false;
@@ -150,8 +150,8 @@ async fn stream_tool_call_emits_act_step_and_completes() {
         .build()
         .unwrap();
 
-    let mut session = agent.session("u1", "stream-tool").await.unwrap();
-    let mut stream = session.chat_stream("call echo").await.unwrap();
+    let thread = agent.thread("u1", "stream-tool");
+    let mut stream = agent.run_stream(&thread, "call echo").await.unwrap();
 
     let mut saw_act_step = false;
     let mut completed = false;
@@ -172,9 +172,9 @@ async fn stream_tool_call_emits_act_step_and_completes() {
     assert!(completed, "should receive Completed event");
 }
 
-/// 流式模式 SessionBusy：第二个并发请求立即返回错误。
+/// 流式模式 ThreadBusy：第二个并发请求立即返回错误。
 #[tokio::test]
-async fn stream_session_busy_returns_error() {
+async fn stream_thread_busy_returns_error() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -195,12 +195,12 @@ async fn stream_session_busy_returns_error() {
         .build()
         .unwrap();
 
-    let mut s1 = agent.session("u1", "busy-stream").await.unwrap();
-    let mut s2 = s1.clone();
+    let t1 = agent.thread("u1", "busy-stream");
+    let t2 = t1.clone();
 
-    let _stream1 = s1.chat_stream("first").await.unwrap();
+    let _stream1 = agent.run_stream(&t1, "first").await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    let result = s2.chat_stream("second").await;
-    assert!(matches!(result, Err(ArcError::SessionBusy)));
+    let result = agent.run_stream(&t2, "second").await;
+    assert!(matches!(result, Err(ArcError::ThreadBusy)));
 }

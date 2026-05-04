@@ -3,21 +3,25 @@ pub mod agent;
 pub mod error;
 pub mod interrupt;
 pub mod memory;
-pub mod session;
+pub mod run;
+pub mod thread;
 pub mod tools;
 
 pub use agent::{
-    Agent, AgentBuilder, AgentConfig, ExecutionState, ExecutionStep, Memory, StepInput, StepKind,
-    StepOutput,
+    Agent, AgentBuilder, AgentConfig, ExecutionState, ExecutionStep, Memory, MemoryClient,
+    StepInput, StepKind, StepOutput,
 };
 pub use error::ArcError;
 pub use interrupt::{
     AutoApproveHandler, CliInterruptHandler, InterruptDecision, InterruptHandler, InterruptReason,
 };
 pub use memory::{InMemoryStore, MemoryFilter, MemoryId, MemoryScope, MemoryStore, SqliteMemory};
-pub use session::{
-    ExecutionEvent, ExecutionEventStream, ExecutionResult, ExecutionTrace, InMemorySessionStore,
-    MediaRef, Modality, Session, SessionId, SessionInput, SessionStore, SqliteSessionStore, UserId,
+pub use run::{
+    RunEvent, RunEventStream, RunId, RunInput, RunRequest, RunResult, RunStatus, RunStep, RunTrace,
+};
+pub use thread::{
+    InMemoryThreadStore, MediaRef, Modality, SqliteThreadStore, Thread, ThreadId, ThreadSnapshot,
+    ThreadStore, UserId,
 };
 pub use tools::{
     Tool, ToolError, ToolSpec,

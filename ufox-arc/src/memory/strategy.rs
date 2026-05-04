@@ -1,21 +1,21 @@
 use crate::memory::{Memory, MemoryFilter, MemoryScope, MemoryStore};
-use crate::session::{SessionId, UserId};
+use crate::thread::{ThreadId, UserId};
 
-/// 检索上下文记忆：先取会话记忆，再补充用户记忆，按时间倒序合并。
+/// 检索上下文记忆：先取线程记忆，再补充用户记忆，按时间倒序合并。
 ///
-/// `limit` 为总条数上限（会话与用户各占一半，不足时自动补另一半）。
+/// `limit` 为总条数上限（线程与用户各占一半，不足时自动补另一半）。
 pub async fn retrieve_context(
     store: &dyn MemoryStore,
-    session_id: &SessionId,
+    thread_id: &ThreadId,
     user_id: &UserId,
     limit: usize,
 ) -> Vec<Memory> {
     let half = (limit / 2).max(1);
 
-    let session_hits = store
+    let thread_hits = store
         .find(MemoryFilter {
-            scope: Some(MemoryScope::Session {
-                session_id: session_id.clone(),
+            scope: Some(MemoryScope::Thread {
+                thread_id: thread_id.clone(),
             }),
             limit: Some(half),
             ..Default::default()
@@ -28,13 +28,13 @@ pub async fn retrieve_context(
             scope: Some(MemoryScope::User {
                 user_id: user_id.clone(),
             }),
-            limit: Some(limit.saturating_sub(session_hits.len()).max(1)),
+            limit: Some(limit.saturating_sub(thread_hits.len()).max(1)),
             ..Default::default()
         })
         .await
         .unwrap_or_default();
 
-    let mut all = session_hits;
+    let mut all = thread_hits;
     all.extend(user_hits);
     all
 }

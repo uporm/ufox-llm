@@ -13,7 +13,7 @@ v2 在 v1 核心能力稳定的基础上，新增两类能力：
 - 技能和多 Agent 只是 v1 核心能力的"组合"，不引入全新的执行模型
 - 保持同样的"不过度设计"原则：第一次就跑通主路径，边界情况后补
 - Skills 是轻量的：本质是"带配置的 Agent"，不是全新的运行时
-- Multi-Agent 是无共享的：各 Agent 拥有独立 Session，通过消息传递协作
+- Multi-Agent 是无共享的：各 Agent 拥有独立 Thread，通过消息传递协作
 
 ## 14. 技能系统（Skills）
 
@@ -30,7 +30,7 @@ Skill = name + description
   - 框架根据 description 自动生成执行上下文
   - 技能内部 LLM 可访问所有已注册工具
   - 技能内部 LLM 可发现并调用其他技能（调用栈保护）
-  - 调用方只需 session.chat()，技能选择和调用完全自主
+  - 调用方只需 `agent.run(&thread, task)`，技能选择和调用完全自主
 ```
 
 **上下文预算问题：**
@@ -119,11 +119,11 @@ pub struct ExecutionConfig {
 }
 ```
 
-**Session API 不变：**
+**Thread / Run API 不变：**
 
 ```rust
-// chat() / chat_stream() 完全不变，技能对调用方零感知
-let result = session.chat("任务描述").await?;
+// run() / run_stream() 完全不变，技能对调用方零感知
+let result = agent.run(&thread, "任务描述").await?;
 ```
 
 ### 14.3 框架内部机制
@@ -195,7 +195,7 @@ let result = session.chat("任务描述").await?;
 ### 14.4 执行流程示例
 
 ```text
-session.chat("研究 Rust async trait，审查代码，综合成报告")
+session.run(&thread, "研究 Rust async trait，审查代码，综合成报告")
   │
   ├─ 技能数(3) ≤ max_skills_per_call(8)，全量注入
   ├─ 工具列表：[web_search, file_write, research↗, code_review↗, tech_report↗]
@@ -249,10 +249,10 @@ async fn main() -> anyhow::Result<()> {
         })
         .build()?;
 
-    let mut session = agent.session("user_123", None).await?;
+    let mut session = agent.thread("user_123", None).await?;
 
     // LLM 自主判断：直接用 tech_report，tech_report 再自主调用 research 和 code_review
-    let result = session.chat(
+    let result = session.run(&thread, 
         "研究 Rust async trait 最新进展，审查这段代码，综合成报告：\n```rust\n...\n```"
     ).await?;
     println!("{}", result.response.text);
@@ -279,8 +279,8 @@ let agent = Agent::builder()
     // 框架自动按相关性选 5 个 + 注入 discover_skill
     .build()?;
 
-let mut session = agent.session("user_123", None).await?;
-let result = session.chat("对这个 PR 做安全审计和性能分析").await?;
+let mut session = agent.thread("user_123", None).await?;
+let result = session.run(&thread, "对这个 PR 做安全审计和性能分析").await?;
 // 框架自动选出 security_audit / perf_analysis 等相关技能注入
 println!("{}", result.response.text);
 ```
@@ -304,7 +304,7 @@ agent.remove_skill("deploy_check")?;
 ### 14.6 设计决策
 
 - **Skill 只有 name + description**：行为完全由 LLM 在运行时自主决定，框架不预设工具子集或子技能列表
-- **技能对调用方零感知**：`chat()` 不变，技能选择和调用由 LLM 驱动
+- **技能对调用方零感知**：`run()` 调用路径不变，技能选择和调用由 LLM 驱动
 - **上下文预算是硬约束**：`max_skills_per_call` 限制注入数量，超出时选最相关的而不是全量
 - **`discover_skill` 作为安全网**：LLM 永远有办法找到未注入的技能，预算限制不丢失能力
 - **循环和超深度都静默降级**：不报错、不中断，调用栈中已有的技能被排除出可选列表，深度超限时停止注入技能
@@ -333,7 +333,7 @@ agent.remove_skill("deploy_check")?;
 
 **关键决策：**
 
-- 每个成员 Agent 拥有独立的 `Session`，不共享状态
+- 每个成员 Agent 拥有独立的 `Thread`，不共享状态
 - 协调器与成员之间只通过字符串消息传递，不传递内部结构
 - 成员 Agent 的结果以 `ToolResult` 的形式回注到协调器的上下文
 - 调用方只感知协调器，对成员 Agent 透明
@@ -406,14 +406,14 @@ async fn main() -> anyhow::Result<()> {
     // 成员：研究员 Agent
     let researcher = Agent::builder()
         .llm(Client::from_env()?)
-        .system("你是一位严谨的研究员，负责收集和核实信息。")
+        .instructions("你是一位严谨的研究员，负责收集和核实信息。")
         .tool(WebSearchTool::new())
         .build()?;
 
     // 成员：代码专家 Agent
     let coder = Agent::builder()
         .llm(Client::from_env()?)
-        .system("你是一位 Rust 专家，负责编写和优化代码。")
+        .instructions("你是一位 Rust 专家，负责编写和优化代码。")
         .tool(FileReadTool::new())
         .tool(FileWriteTool::new())
         .build()?;
@@ -421,13 +421,13 @@ async fn main() -> anyhow::Result<()> {
     // 成员：审查员 Agent
     let reviewer = Agent::builder()
         .llm(Client::from_env()?)
-        .system("你是一位严谨的审查员，负责找出潜在问题。")
+        .instructions("你是一位严谨的审查员，负责找出潜在问题。")
         .build()?;
 
     // 协调器
     let coordinator = Agent::builder()
         .llm(client)
-        .system(
+        .instructions(
             "你是一位项目协调员。接到任务后，先分析需要哪些专家，\
              然后委派给对应的成员，最后汇总结果给用户。",
         )
@@ -451,15 +451,15 @@ async fn main() -> anyhow::Result<()> {
 
 ```text
 1. team.run(user_id, task)
-   ├─ 协调器创建新 Session（session_id 自动生成）
+   ├─ 协调器创建新 Thread（thread_id 自动生成）
    ├─ 框架为协调器注入 delegate_to_researcher / delegate_to_coder / delegate_to_reviewer 工具
    
 2. 协调器 Think 步骤
    └─ LLM 输出：调用 delegate_to_researcher("研究 async trait")
 
 3. 框架拦截 delegate_to_* 工具调用
-   ├─ 为对应成员 Agent 创建独立 Session（user_id 相同，session_id 新生成）
-   ├─ 在成员 Session 中执行完整的 Think/Act 循环
+   ├─ 为对应成员 Agent 创建独立 Thread（user_id 相同，thread_id 新生成）
+   ├─ 在成员 Thread 中执行完整的 Think/Act 循环
    └─ 将成员结果转为 ToolResult 回注到协调器上下文
 
 4. 协调器继续 Think
@@ -471,7 +471,7 @@ async fn main() -> anyhow::Result<()> {
 ### 15.5 设计决策
 
 - **成员 Agent 对协调器透明**：协调器只看到"委派工具"，不知道背后是 Agent 还是普通工具
-- **不共享 Session**：成员 Agent 拥有独立上下文，避免状态污染
+- **不共享 Thread**：成员 Agent 拥有独立上下文，避免状态污染
 - **不引入消息总线（MessageBus）**：v2 不需要异步事件驱动的消息总线，调用方式就足够
 - **不引入 `AgentRole` 枚举**：协调器和成员的区别只在于是否被注入了委派工具，不需要专门的角色概念
 - **不引入 `AgentLoop` 新类型**：AgentTeam 复用同一个执行循环，不需要单独定义
@@ -607,7 +607,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 
 **完成定义：**
 
-- `session.chat()` 不变，技能对调用方完全透明
+- `session.run(&thread, )` 不变，技能对调用方完全透明
 - LLM 根据技能 `description` 自主决定是否调用、嵌套调用哪些技能
 - 技能执行时可访问所有注册工具（不受限制）
 - 技能可自主发现并调用其他技能（调用栈排除自身，防止直接循环）
@@ -636,7 +636,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 - `AgentTeam` 与 `AgentTeamBuilder`
 - 委派工具（`DelegateTool`）的自动生成与注入
 - `team.run()` 的完整执行流程
-- 成员 Agent 的独立 Session 创建与管理
+- 成员 Agent 的独立 Thread 创建与管理
 - 成员执行结果转换为 `ToolResult` 回注协调器
 - 示例 `examples/multi_agent_team.rs`
 
@@ -686,7 +686,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 - [ ] `AgentTeam::builder()` 可以正常构造
 - [ ] 框架自动为协调器注入委派工具
 - [ ] `team.run()` 能完整执行协调器 → 成员 → 协调器的流程
-- [ ] 成员 Agent 拥有独立 Session
+- [ ] 成员 Agent 拥有独立 Thread
 - [ ] 成员执行结果正确转换为 `ToolResult`
 - [ ] 共享 `MemoryStore` 可以在团队成员间生效
 - [ ] `examples/multi_agent_team.rs` 可以运行
@@ -700,7 +700,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 
 ### Q8: 多 Agent 中的成员 Agent 能不能共享会话上下文？
 
-**A:** 不能，也不应该。成员 Agent 拥有独立 Session，避免状态污染。如果需要共享信息，通过两种方式：（1）协调器在委派时把上下文摘要传给成员；（2）共享同一个 `MemoryStore` 实例（见第 15.6 节）。
+**A:** 不能，也不应该。成员 Agent 拥有独立 Thread，避免状态污染。如果需要共享信息，通过两种方式：（1）协调器在委派时把上下文摘要传给成员；（2）共享同一个 `MemoryStore` 实例（见第 15.6 节）。
 
 ### Q9: 为什么多 Agent 不用消息总线（MessageBus）？
 
@@ -708,7 +708,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 
 ### Q10: 技能执行失败了怎么办？
 
-**A:** 技能执行失败返回 `ArcError`，与普通 `chat()` 失败的错误处理方式相同。调用方可以 `?` 传播，或者 `.unwrap_or_else()` 降级处理。技能执行前已进入 Session 的消息历史不会回滚。
+**A:** 技能执行失败返回 `ArcError`，与普通 `run()` 失败的错误处理方式相同。调用方可以 `?` 传播，或者 `.unwrap_or_else()` 降级处理。技能执行前已进入 Thread 的消息历史不会回滚。
 
 ### Q11: v2 还有哪些东西没有做？
 

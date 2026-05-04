@@ -5,7 +5,7 @@ pub use cli::{AutoApproveHandler, CliInterruptHandler};
 use async_trait::async_trait;
 
 use crate::error::ArcError;
-use crate::session::{SessionId, UserId};
+use crate::thread::{ThreadId, UserId};
 
 /// 触发人工中断的原因。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -45,7 +45,7 @@ pub trait InterruptHandler: Send + Sync {
         &self,
         reason: InterruptReason,
         user_id: &UserId,
-        session_id: &SessionId,
+        thread_id: &ThreadId,
     ) -> Result<InterruptDecision, ArcError>;
 }
 
@@ -53,5 +53,5 @@ pub trait InterruptHandler: Send + Sync {
 pub struct InterruptCtx<'a> {
     pub handler: &'a dyn InterruptHandler,
     pub user_id: &'a UserId,
-    pub session_id: &'a SessionId,
+    pub thread_id: &'a ThreadId,
 }

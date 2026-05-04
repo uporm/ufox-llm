@@ -10,7 +10,7 @@ use super::execution::{ExecutionState, ExecutionStep, StepInput, StepKind, StepO
 use crate::error::ArcError;
 use crate::interrupt::{InterruptCtx, InterruptHandler};
 use crate::memory::{MemoryStore, strategy};
-use crate::session::{SessionId, UserId};
+use crate::thread::{ThreadId, UserId};
 use crate::tools::ToolManager;
 
 const MEMORY_CONTEXT_MESSAGE_NAME: &str = "memory_context";
@@ -19,7 +19,7 @@ const MEMORY_CONTEXT_MESSAGE_NAME: &str = "memory_context";
 pub(crate) struct MemoryCtx<'a> {
     pub store: &'a dyn MemoryStore,
     pub user_id: &'a UserId,
-    pub session_id: &'a SessionId,
+    pub thread_id: &'a ThreadId,
 }
 
 /// `run_loop` 的调用上下文。
@@ -27,11 +27,11 @@ pub(crate) struct MemoryCtx<'a> {
 /// 将主要依赖聚合在一起，避免函数签名随功能扩展而失控。
 pub(crate) struct LoopCtx<'a> {
     pub llm: &'a Client,
-    pub system: Option<&'a str>,
+    pub instructions: Option<&'a str>,
     pub config: &'a AgentConfig,
     pub tools: Option<&'a ToolManager>,
     pub memory: Option<MemoryCtx<'a>>,
-    pub interrupt: Option<(&'a dyn InterruptHandler, &'a UserId, &'a SessionId)>,
+    pub interrupt: Option<(&'a dyn InterruptHandler, &'a UserId, &'a ThreadId)>,
 }
 
 /// `run_loop` 的内部返回值。
@@ -57,7 +57,7 @@ pub(crate) async fn run_loop(
 ) -> Result<LoopResult, ArcError> {
     let LoopCtx {
         llm,
-        system,
+        instructions,
         config,
         tools,
         memory,
@@ -80,7 +80,7 @@ pub(crate) async fn run_loop(
 
         let hits = if let Some(ref ctx) = memory {
             let retrieved =
-                strategy::retrieve_context(ctx.store, ctx.session_id, ctx.user_id, 10).await;
+                strategy::retrieve_context(ctx.store, ctx.thread_id, ctx.user_id, 10).await;
             let context_text = strategy::format_context(&retrieved);
             if !context_text.is_empty() {
                 tracing::debug!(hits = retrieved.len(), "perceive: injecting memory context");
@@ -120,7 +120,7 @@ pub(crate) async fn run_loop(
         // Think：调用 LLM。
         tracing::debug!(iteration, "think: calling LLM");
         let think_start = Instant::now();
-        let req = build_request(system, messages, config, tools);
+        let req = build_request(instructions, messages, config, tools);
 
         let response = tokio::time::timeout(remaining, llm.chat(req))
             .await
@@ -246,13 +246,13 @@ pub(crate) async fn run_loop(
 
 /// 构建一次 LLM `chat` 请求。
 pub(crate) fn build_request(
-    system: Option<&str>,
+    instructions: Option<&str>,
     messages: &[Message],
     config: &AgentConfig,
     tools: Option<&ToolManager>,
 ) -> ChatRequest {
     let mut builder = ChatRequest::builder().messages(messages.to_vec());
-    if let Some(s) = system {
+    if let Some(s) = instructions {
         builder = builder.system(s.to_string());
     }
     if let Some(t) = config.temperature {
@@ -274,7 +274,7 @@ pub(crate) fn build_request(
 pub(crate) async fn execute_tools(
     calls: &[ufox_llm::ToolCall],
     tools: Option<&ToolManager>,
-    interrupt: Option<(&dyn InterruptHandler, &UserId, &SessionId)>,
+    interrupt: Option<(&dyn InterruptHandler, &UserId, &ThreadId)>,
 ) -> Result<Vec<ToolResult>, ArcError> {
     let Some(manager) = tools else {
         return Ok(stub_execute_tools(calls));
@@ -282,10 +282,10 @@ pub(crate) async fn execute_tools(
 
     let mut results = Vec::with_capacity(calls.len());
     for call in calls {
-        let ctx = interrupt.map(|(handler, user_id, session_id)| InterruptCtx {
+        let ctx = interrupt.map(|(handler, user_id, thread_id)| InterruptCtx {
             handler,
             user_id,
-            session_id,
+            thread_id,
         });
         let result = manager.execute(call, ctx).await;
         match result {

@@ -50,9 +50,9 @@ AI 在完成任一阶段时，输出应至少包含：
 - 可序列化的数据结构尽量都支持 `serde`
 - 先保证最小正确性，再做性能优化
 - 没有必要时，不要为"未来可能会用到"的场景过度抽象
-- 多轮上下文与恢复围绕 `session_id` 建模，长期偏好与跨会话记忆围绕 `user_id` 建模
-- 第一版默认同一 `session_id` 不允许并发写；不同 `session_id` 可以并发
-- 对外会话 API 统一使用 `chat()` / `chat_stream()`
+- 多轮上下文与恢复围绕 `thread_id` 建模，长期偏好与跨会话记忆围绕 `user_id` 建模
+- 第一版默认同一 `thread_id` 不允许并发写；不同 `thread_id` 可以并发
+- 对外运行 API 统一使用 `agent.run()` / `agent.run_stream()`
 - 写代码时必须遵守第 10.8 节的注释与编码规范，尤其是 `pub` 项文档注释、`unsafe` 的 `// SAFETY:` 说明，以及"只注释为什么、不注释是什么"
 
 ### 2.4 冲突处理优先级
@@ -72,7 +72,7 @@ AI 在完成任一阶段时，输出应至少包含：
 - ✅ Agent 能自主完成多步骤任务
 - ✅ 工具调用可以可靠执行，并具备错误恢复能力
 - ✅ 支持文本、图片、音频、视频、文档等多模态输入
-- ✅ 记忆支持跨会话持久化，并区分 `user memory` 与 `session memory`
+- ✅ 记忆支持跨会话持久化，并区分 `user memory` 与 `thread memory`
 - ✅ HITL 中断在需要人工确认时正常触发
 - ✅ 生产能力完善：日志、指标、错误处理可用
 - ✅ 单步额外运行时开销目标小于 `100ms`（不含外部模型与工具耗时）
@@ -89,7 +89,7 @@ AI 工具应按下面顺序阅读和实施：
 1. **第 5 节：分阶段实施计划**
    先明确每个阶段的目标、边界、输入输出和完成定义。
 2. **第 6 节：核心架构要求**
-   再理解运行时中的 Session、Agent 循环、工具、记忆、HITL。
+   再理解运行时中的 Thread、Agent 循环、工具、记忆、HITL。
 3. **第 7 节：目录结构与模块落点**
    确认代码应该放在哪里，模块边界如何划分。
 4. **第 8 节：公开 API 示例**
@@ -103,18 +103,18 @@ AI 工具应按下面顺序阅读和实施：
 
 本节是 AI 工具的主执行入口。默认按阶段顺序推进，除非用户明确要求跳阶段。
 
-### 阶段 1：最小可运行 Agent 与 Session
+### 阶段 1：最小可运行 Agent 与 Thread
 
-**目标**：先做出一个能调用 `ufox-llm` 完成单轮问答，并具备最小 Session 的 Agent。
+**目标**：先做出一个能调用 `ufox-llm` 完成单轮问答，并具备最小 Thread 的 Agent。
 
 **本阶段必须实现：**
 
 - `Agent` 主结构体与 `Agent::builder()`
 - 基础 `AgentConfig`
-- `Session` 的最小结构
-- `agent.session(user_id, session_id).await?`
-- `agent.new_session(user_id).await?`
-- `session.chat()` 与 `session.chat_stream()`
+- `Thread` 的最小结构
+- `agent.thread(user_id, thread_id).await?`
+- `agent.new_thread(user_id).await?`
+- `session.run(&thread, )` 与 `session.run_stream(&thread, )`
 - 最小可运行示例 `examples/simple_agent.rs`
 - 基础错误类型与结果类型
 
@@ -129,7 +129,7 @@ AI 工具应按下面顺序阅读和实施：
 **完成定义：**
 
 - 可以构造一个 Agent，并打开某个用户下的会话
-- 同一个 `session` 能连续执行多轮 `chat()`
+- 同一个 `thread` 能连续执行多轮 `run()`
 - 支持普通输出与流式输出
 - 外部调用路径简洁，示例可直接运行
 - 至少有基础单元测试或示例级验证
@@ -173,11 +173,11 @@ AI 工具应按下面顺序阅读和实施：
 
 **完成定义：**
 
-- 一次 `session.chat()` 至少能输出完整步骤轨迹
+- 一次 `session.run(&thread, )` 至少能输出完整步骤轨迹
 - 每一步都可序列化或具备清晰的数据结构
 - 简单场景下只有 Think/Act/Completion 步骤
 - 复杂场景下可以启用完整 5 步
-- 运行结果能带上 `user_id` 与 `session_id`
+- 运行结果能带上 `user_id` 与 `thread_id`
 
 **建议落点：**
 
@@ -267,7 +267,7 @@ impl Default for ExecutionConfig {
 
 - `MemoryStore` trait（统一接口，通过 `MemoryScope` 区分用户/会话）
 - `Memory`、`MemoryFilter`、`MemoryScope`
-- `MemoryScope::User` 与 `MemoryScope::Session` 两层作用域
+- `MemoryScope::User` 与 `MemoryScope::Thread` 两层作用域
 - 开发期内存后端
 - 本地持久化后端，优先 SQLite
 - 执行前检索、执行后写回
@@ -294,16 +294,16 @@ impl Default for ExecutionConfig {
 **本阶段必须实现：**
 
 - `ufox-llm::Message` / `ContentPart` 直接接入
-- 统一通过 `session.chat(message)` 进入多模态输入
+- 统一通过 `session.run(&thread, message)` 进入多模态输入
 - 区分原始模态与派生模态
 - 文档、音频、视频的基础提取入口
 - 来源信息记录
 
 **完成定义：**
 
-- `Session` 可以接收多模态输入消息
+- `Thread` 可以接收多模态输入消息
 - 文档输入能转成后续推理可消费的文本或图片片段
-- `session memory` 中能保留来源、页码范围、时间片等上下文
+- `thread memory` 中能保留来源、页码范围、时间片等上下文
 - 同一 `session` 的后续追问不必重复上传同一份媒体
 
 **建议落点：**
@@ -328,7 +328,7 @@ impl Default for ExecutionConfig {
 
 - 高风险工具在执行前可以被拦截
 - 用户可继续、取消或修改参数后继续
-- 中断上下文能定位到具体 `user_id` 与 `session_id`
+- 中断上下文能定位到具体 `user_id` 与 `thread_id`
 - 存在最小 CLI 示例
 
 **建议落点：**
@@ -347,14 +347,14 @@ impl Default for ExecutionConfig {
 
 - 配置加载
 - tracing 日志与指标埋点
-- 通过 `user_id + session_id` 打开并继续会话
+- 通过 `user_id + thread_id` 打开并继续会话
 - 基础限流、超时、预算控制
 - 单元测试、集成测试、基准测试骨架
 
 **完成定义：**
 
 - 能观测一次完整执行链路
-- 能通过 `user_id + session_id` 恢复会话状态
+- 能通过 `user_id + thread_id` 恢复会话状态
 - 关键模块有测试覆盖
 - 工程具备继续迭代的生产基础
 
@@ -367,80 +367,74 @@ impl Default for ExecutionConfig {
 ### 6.1 用户与会话模型
 
 `Agent` 只负责模型、工具、配置等静态能力。
-多轮对话、恢复状态、会话级上下文和用户长期偏好，统一围绕 `Session` 建模。
+多轮对话、恢复状态、会话级上下文和用户长期偏好，统一围绕 `Thread` 建模。
 
 推荐数据结构：
 
 ```rust
 pub struct UserId(pub String);
-pub struct SessionId(pub String);
+pub struct ThreadId(pub String);
 
-pub struct Session {
+pub struct Thread {
     user_id: UserId,
-    session_id: SessionId,
-    agent: Arc<Agent>,
+    thread_id: ThreadId,
     messages: Vec<Message>,
-    state: SessionState,
+    state: ThreadState,
 }
 
-pub enum SessionState {
+pub enum ThreadState {
     Idle,
     Running { started_at: Instant },
 }
 
-pub enum SessionInput {
+pub enum RunInput {
     Text(String),
     Message(Message),
 }
 
 impl Agent {
-    /// 打开指定 `session_id` 的会话；不存在时创建。
-    pub async fn session(
+    /// 打开指定 `thread_id` 的线程；不存在时创建。
+    pub fn thread(
         &self,
         user_id: impl Into<UserId>,
-        session_id: impl Into<SessionId>,
-    ) -> Result<Session>;
+        thread_id: impl Into<ThreadId>,
+    ) -> Thread;
 
-    /// 创建一个新的会话，并由框架生成 `session_id`。
-    pub async fn new_session(
-        &self,
-        user_id: impl Into<UserId>,
-    ) -> Result<Session>;
-}
+    /// 创建一个新的线程，并由框架生成 `thread_id`。
+    pub fn new_thread(&self, user_id: impl Into<UserId>) -> Thread;
 
-impl Session {
-    pub async fn chat<I>(&mut self, input: I) -> Result<ExecutionResult>
+    pub async fn run<I>(&self, thread: &Thread, input: I) -> Result<RunResult>
     where
-        I: Into<SessionInput>;
+        I: Into<RunInput>;
 
-    pub async fn chat_stream<I>(&mut self, input: I) -> Result<ExecutionEventStream>
+    pub async fn run_stream<I>(&self, thread: &Thread, input: I) -> Result<RunEventStream>
     where
-        I: Into<SessionInput>;
+        I: Into<RunInput>;
 }
 ```
 
 推荐外部调用方式：
 
 ```rust
-// 指定 session_id，用于恢复已有会话
-let mut session = agent.session("user_123", "design-review").await?;
-let result = session.chat("继续刚才的话题").await?;
+// 指定 thread_id，用于恢复已有线程
+let thread = agent.thread("user_123", "design-review");
+let result = agent.run(&thread, "继续刚才的话题").await?;
 
-// 创建新会话，由框架自动生成 session_id
-let mut session = agent.new_session("user_123").await?;
-let result = session.chat("开始新的对话").await?;
+// 创建新线程，由框架自动生成 thread_id
+let thread = agent.new_thread("user_123");
+let result = agent.run(&thread, "开始新的对话").await?;
 ```
 
 设计要求：
 
-- `session_id` 是多轮会话与恢复的主键
-- 显式恢复或复用会话时使用 `session(user_id, session_id)`
-- 需要自动生成会话 ID 时使用 `new_session(user_id)`，由框架生成 UUID
+- `thread_id` 是多轮会话与恢复的主键
+- 显式恢复或复用线程时使用 `thread(user_id, thread_id)`
+- 需要自动生成会话 ID 时使用 `new_thread(user_id)`，由框架生成 UUID
 - `user_id` 是长期偏好和跨会话记忆的归属键
-- 第一版不引入复杂身份体系，只保留 `user_id + session_id`
-- 同一 `session_id` 通过 `SessionState` 防止并发写；新的并发写请求立即返回 `SessionBusy`
-- 多模态输入与文本输入共用 `chat()` / `chat_stream()` 入口
-- **不要引入 `UserHandle` 中间层**，直接 `agent.session(user_id, session_id)` 即可
+- 第一版不引入复杂身份体系，只保留 `user_id + thread_id`
+- 同一 `thread_id` 通过 `ThreadState` 防止并发写；新的并发写请求立即返回 `ThreadBusy`
+- 多模态输入与文本输入共用 `run()` / `run_stream()` 入口
+- **不要引入 `UserHandle` 中间层**，直接 `agent.thread(user_id, thread_id)` 即可
 
 ### 6.2 Agent 推理循环
 
@@ -535,7 +529,7 @@ pub enum StepOutput {
 
 pub struct ExecutionTrace {
     pub user_id: UserId,
-    pub session_id: SessionId,
+    pub thread_id: SessionId,
     pub steps: Vec<ExecutionStep>,
     pub state: ExecutionState,
     pub total_duration: Duration,
@@ -553,14 +547,14 @@ pub enum ExecutionState {
 
 pub struct ExecutionResult {
     pub user_id: UserId,
-    pub session_id: SessionId,
+    pub thread_id: SessionId,
     pub response: ChatResponse,
     pub trace: ExecutionTrace,
 }
 
 pub struct ExecutionEvent {
     pub user_id: UserId,
-    pub session_id: SessionId,
+    pub thread_id: SessionId,
     pub chunk: Option<ChatChunk>,
     pub step: Option<ExecutionStep>,
     pub state_change: Option<ExecutionState>,
@@ -576,8 +570,8 @@ pub struct ExecutionEvent {
 - 完全复用 `ufox-llm` 的 `Message`/`ToolCall`/`ToolResult`/`ChatResponse`
 - 执行循环必须支持超时、最大步数和错误退出
 - 所有运行结果都要能回挂到当前 `session`
-- **不要引入 `ExecutionEngine` 作为公开 API**，它是 `Session` 的内部实现细节
-- **不要引入 `ExecutionContext`**，相关信息直接从 `Session` 获取或作为内部临时变量
+- **不要引入 `ExecutionEngine` 作为公开 API**，它是 `Thread` 的内部实现细节
+- **不要引入 `ExecutionContext`**，相关信息直接从 `Thread` 获取或作为内部临时变量
 
 ### 6.3 工具系统
 
@@ -651,7 +645,7 @@ impl ToolManager {
 
 记忆最小分层：
 
-1. **Session Memory**：当前会话中的临时上下文、文档摘要、工具结果、阶段性结论
+1. **Thread Memory**：当前会话中的临时上下文、文档摘要、工具结果、阶段性结论
 2. **User Memory**：用户长期偏好、稳定约束、跨会话复用的事实
 
 推荐接口：
@@ -660,7 +654,7 @@ impl ToolManager {
 
 ```rust
 pub enum MemoryScope {
-    Session { session_id: SessionId },
+    Thread { thread_id: SessionId },
     User { user_id: UserId },
 }
 
@@ -690,12 +684,12 @@ pub struct Memory {
 
 写入规则：
 
-- 文档提取结果、任务中间结论、当前会话摘要写入 `Session Memory`
+- 文档提取结果、任务中间结论、当前会话摘要写入 `Thread Memory`
 - 用户风格偏好、长期事实、稳定约束写入 `User Memory`
 
 检索顺序建议：
 
-1. 先检索当前 `session memory`
+1. 先检索当前 `thread memory`
 2. 再补充 `user memory`
 3. 最后合并结果进入本轮上下文
 
@@ -733,23 +727,23 @@ pub struct ExtractedContent {
 
 要求：
 
-- `Session` 可以接收多模态输入消息
+- `Thread` 可以接收多模态输入消息
 - 文档输入能转成后续推理可消费的文本或图片片段
-- `session memory` 中能保留来源、页码范围、时间片等上下文
+- `thread memory` 中能保留来源、页码范围、时间片等上下文
 - 同一 `session` 的后续追问不必重复上传同一份媒体
 
 ### 6.6 最小存储约束
 
 第一版不强制完整的执行快照模型，但至少要求能持久化以下信息：
 
-- `sessions`：必须带 `user_id + session_id`
-- `messages`：必须按 `session_id` 归档
-- `session memory`：必须按 `session_id` 归档
+- `sessions`：必须带 `user_id + thread_id`
+- `messages`：必须按 `thread_id` 归档
+- `thread memory`：必须按 `thread_id` 归档
 - `user memory`：必须按 `user_id` 归档
 
 实现要求：
 
-- 能按 `user_id + session_id` 打开已有会话
+- 能按 `user_id + thread_id` 打开已有会话
 - 消息历史必须按写入顺序可重建
 - 大媒体默认存引用，不存整块二进制
 - 所有持久化结构优先支持 `serde`
@@ -758,10 +752,10 @@ pub struct ExtractedContent {
 
 第一版采用最简单、最容易落地的规则：
 
-- 同一 `session_id` 不允许并发写
+- 同一 `thread_id` 不允许并发写
 - 同一 `user_id` 下的不同 `session` 可以并发
 - 不同用户的不同 `session` 可以并发
-- 同一 `session` 正在执行时，新的写请求直接返回 `SessionBusy`
+- 同一 `session` 正在执行时，新的写请求直接返回 `ThreadBusy`
 
 ### 6.8 HITL
 
@@ -786,7 +780,7 @@ pub trait InterruptHandler: Send + Sync {
         &self,
         reason: InterruptReason,
         user_id: &UserId,
-        session_id: &SessionId,
+        thread_id: &SessionId,
     ) -> Result<InterruptDecision>;
 }
 
@@ -800,7 +794,7 @@ pub enum InterruptDecision {
 
 要求：
 
-- 中断上下文必须能追溯到 `user_id` 与 `session_id`
+- 中断上下文必须能追溯到 `user_id` 与 `thread_id`
 - 会话恢复后仍能继续人工确认后的执行流程
 - 第一版只做工具确认，不做低置信度判断等复杂场景
 
@@ -867,13 +861,13 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::from_env()?;
     let agent = Agent::builder()
         .llm(client)
-        .system("你是一位 Rust 专家，回答简洁准确。")
+        .instructions("你是一位 Rust 专家，回答简洁准确。")
         .config(AgentConfig::default())
         .build()?;
 
-    let mut session = agent.session("user_123", "intro").await?;
+    let mut session = agent.thread("user_123", "intro").await?;
 
-    let result = session.chat("解释 Rust 中的所有权规则").await?;
+    let result = session.run(&thread, "解释 Rust 中的所有权规则").await?;
     println!("{}", result.response.text);
     Ok(())
 }
@@ -934,9 +928,9 @@ async fn main() -> anyhow::Result<()> {
         .max_iterations(5)
         .build()?;
 
-    let mut session = agent.session("user_123", "weather").await?;
+    let mut session = agent.thread("user_123", "weather").await?;
 
-    let result = session.chat("帮我查询杭州和上海的天气，给出穿衣建议").await?;
+    let result = session.run(&thread, "帮我查询杭州和上海的天气，给出穿衣建议").await?;
     println!("{}", result.response.text);
     Ok(())
 }
@@ -956,9 +950,9 @@ async fn main() -> anyhow::Result<()> {
         .llm(client)
         .build()?;
 
-    let mut session = agent.session("user_123", "poem").await?;
+    let mut session = agent.thread("user_123", "poem").await?;
 
-    let mut stream = session.chat_stream("写一首关于 Rust 的七言绝句").await?;
+    let mut stream = session.run_stream(&thread, "写一首关于 Rust 的七言绝句").await?;
     while let Some(event) = stream.next().await {
         let event = event?;
         if let Some(chunk) = event.chunk {
@@ -989,12 +983,12 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     // 写入用户长期偏好
-    let mut profile = agent.session("user_123", "profile").await?;
-    profile.chat("我喜欢简洁的代码风格，不喜欢过度抽象").await?;
+    let mut profile = agent.thread("user_123", "profile").await?;
+    profile.run(&thread, "我喜欢简洁的代码风格，不喜欢过度抽象").await?;
 
     // 在另一个会话中继续利用同一用户的长期偏好
-    let mut review = agent.session("user_123", "review").await?;
-    let result = review.chat("帮我 review 这段代码是否符合我的风格偏好").await?;
+    let mut review = agent.thread("user_123", "review").await?;
+    let result = review.run(&thread, "帮我 review 这段代码是否符合我的风格偏好").await?;
 
     println!("{}", result.response.text);
     Ok(())
@@ -1014,7 +1008,7 @@ async fn main() -> anyhow::Result<()> {
         .llm(client)
         .build()?;
 
-    let mut session = agent.session("user_123", "panic-analysis").await?;
+    let mut session = agent.thread("user_123", "panic-analysis").await?;
 
     let input = Message {
         role: Role::User,
@@ -1030,11 +1024,11 @@ async fn main() -> anyhow::Result<()> {
         name: None,
     };
 
-    let first = session.chat(input).await?;
+    let first = session.run(&thread, input).await?;
     println!("first: {}", first.response.text);
 
     // 继续在同一会话中追问，不需要重复传图片
-    let second = session.chat("基于刚才的截图，再给我一个最小修复 patch").await?;
+    let second = session.run(&thread, "基于刚才的截图，再给我一个最小修复 patch").await?;
     println!("second: {}", second.response.text);
     Ok(())
 }
@@ -1059,9 +1053,9 @@ async fn main() -> anyhow::Result<()> {
         .interrupt_handler(CliInterruptHandler::default())
         .build()?;
 
-    let mut session = agent.session("user_123", "ops").await?;
+    let mut session = agent.thread("user_123", "ops").await?;
 
-    let result = session.chat("列出当前目录下最近修改的 5 个文件").await?;
+    let result = session.run(&thread, "列出当前目录下最近修改的 5 个文件").await?;
     println!("{}", result.response.text);
     Ok(())
 }
@@ -1111,7 +1105,7 @@ metrics_port = 9090
 
 配置要求：
 
-- Agent、Session、工具、记忆、多模态、观测配置分离
+- Agent、Thread、工具、记忆、多模态、观测配置分离
 - 默认值要能支撑本地开发
 - 支持从 TOML、环境变量或 Builder 注入覆盖
 - 配置文件中的 `confirmation_required` 可以覆盖工具的默认确认行为
@@ -1139,8 +1133,8 @@ pub enum ArcError {
     #[error("Memory error: {0}")]
     Memory(String),
     
-    #[error("Session error: {0}")]
-    Session(String),
+    #[error("Thread error: {0}")]
+    Thread(String),
     
     #[error("Timeout after {0:?}")]
     Timeout(Duration),
@@ -1154,13 +1148,13 @@ pub enum ArcError {
 
 - 使用 `tracing` 进行结构化日志
 - 关键路径必须有 `span` 覆盖
-- 错误日志必须包含 `user_id` 与 `session_id`
-- 支持按 `session_id` 过滤日志
+- 错误日志必须包含 `user_id` 与 `thread_id`
+- 支持按 `thread_id` 过滤日志
 
 推荐埋点位置：
 
 - Agent 初始化
-- Session 创建与恢复
+- Thread 创建与恢复
 - 每个执行步骤的开始与结束
 - 工具调用前后
 - 记忆读写
@@ -1282,11 +1276,11 @@ tempfile = "3"
 let agent = Agent::new();
 
 // ✅ 好的注释（解释为什么）
-// 使用 Arc 共享 Agent，因为多个 Session 需要访问同一个工具管理器
+// 使用 Arc 共享 Agent，因为多个 Thread 需要访问同一个工具管理器
 let agent = Arc::new(Agent::new());
 
 // ✅ 好的注释（说明限制）
-// 注意：当前实现不支持并发写同一个 session_id，
+// 注意：当前实现不支持并发写同一个 thread_id，
 // 因为 SQLite 的 WAL 模式在高并发下会有性能问题
 async fn write_session(&mut self) -> Result<()> {
     // ...
@@ -1319,9 +1313,9 @@ AI 工具在完成每个阶段后，应对照以下清单自检：
 ### 阶段 1 检查清单
 
 - [ ] `Agent::builder()` 可以正常构造
-- [ ] `agent.session(user_id, session_id)` 返回 `Session`
-- [ ] `session.chat()` 可以调用 LLM 并返回结果
-- [ ] `session.chat_stream()` 可以流式输出
+- [ ] `agent.thread(user_id, thread_id)` 返回 `Thread`
+- [ ] `session.run(&thread, )` 可以调用 LLM 并返回结果
+- [ ] `session.run_stream(&thread, )` 可以流式输出
 - [ ] `examples/simple_agent.rs` 可以运行
 - [ ] 基础错误类型已定义
 - [ ] 至少有一个单元测试
@@ -1355,7 +1349,7 @@ AI 工具在完成每个阶段后，应对照以下清单自检：
 
 ### 阶段 5 检查清单
 
-- [ ] `Session` 可以接收多模态输入
+- [ ] `Thread` 可以接收多模态输入
 - [ ] 文档提取可以正常工作
 - [ ] 多模态内容可以保存到记忆
 - [ ] `examples/multimodal_agent.rs` 可以运行
@@ -1380,15 +1374,15 @@ AI 工具在完成每个阶段后，应对照以下清单自检：
 
 ### Q1: 为什么不引入 `UserHandle` 中间层？
 
-**A:** `UserHandle` 只是 `user_id` 的包装，除了作为跳板没有实际价值。直接 `agent.session(user_id, session_id)` 更简洁。
+**A:** `UserHandle` 只是 `user_id` 的包装，除了作为跳板没有实际价值。直接 `agent.thread(user_id, thread_id)` 更简洁。
 
-### Q2: 为什么不拆分 `UserMemoryStore` 和 `SessionMemoryStore`？
+### Q2: 为什么不拆分 `UserMemoryStore` 和 `ThreadMemoryStore`？
 
-**A:** 统一使用一个 `MemoryStore` trait，通过 `MemoryScope` 区分用户/会话，可以简化实现和使用。
+**A:** 统一使用一个 `MemoryStore` trait，通过 `MemoryScope` 区分用户/线程，可以简化实现和使用。
 
 ### Q3: 为什么不引入 `ExecutionEngine` 作为公开 API？
 
-**A:** `ExecutionEngine` 是 `Session` 的内部实现细节，不应该暴露给外部。外部只需要关心 `Session` 的 `chat()` 和 `chat_stream()` 方法。
+**A:** `ExecutionEngine` 是 `Thread` / `Run` 的内部实现细节，不应该暴露给外部。外部只需要关心 `agent.run()` 和 `agent.run_stream()`。
 
 ### Q4: 为什么工具的确认逻辑不放在 `ToolSpec` 里？
 

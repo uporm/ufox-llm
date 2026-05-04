@@ -12,15 +12,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::ArcError;
-use crate::session::{SessionId, UserId};
+use crate::thread::{ThreadId, UserId};
 
 pub type MemoryId = Uuid;
 
-/// 记忆的作用域：会话级（临时上下文）或用户级（长期偏好）。
+/// 记忆的作用域：线程级（临时上下文）或用户级（长期偏好）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MemoryScope {
-    Session { session_id: SessionId },
+    Thread { thread_id: ThreadId },
     User { user_id: UserId },
 }
 
@@ -37,10 +37,10 @@ pub struct Memory {
 }
 
 impl Memory {
-    pub fn new_session(session_id: SessionId, content: impl Into<String>) -> Self {
+    pub fn new_thread(thread_id: ThreadId, content: impl Into<String>) -> Self {
         Self {
             id: Uuid::new_v4(),
-            scope: MemoryScope::Session { session_id },
+            scope: MemoryScope::Thread { thread_id },
             content: content.into(),
             metadata: HashMap::new(),
             timestamp: Utc::now(),

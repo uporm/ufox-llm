@@ -3,7 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use ufox_arc::tools::{Tool, ToolError, ToolSpec};
-use ufox_arc::{Agent, ArcError, FileReadTool};
+use ufox_arc::{Agent, FileReadTool};
 use ufox_llm::{Client, ToolResultPayload};
 
 /// 模拟天气查询工具（不发真实网络请求）。
@@ -52,22 +52,19 @@ async fn main() -> Result<()> {
 
     let agent = Agent::builder()
         .llm(llm)
-        .system("你是一个助手，可以查询天气和读取文件。请用中文回答。")
+        .instructions("你是一个助手，可以查询天气和读取文件。请用中文回答。")
         .tool(WeatherTool)
         .tool(FileReadTool::new())
         .build()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let mut session = agent
-        .new_session("demo_user")
-        .await
-        .map_err(|e: ArcError| anyhow::anyhow!("{e}"))?;
+    let thread = agent.new_thread("demo_user");
 
     // 触发工具调用
-    let result = session
-        .chat("北京现在天气怎么样？")
+    let result = agent
+        .run(&thread, "北京现在天气怎么样？")
         .await
-        .map_err(|e: ArcError| anyhow::anyhow!("{e}"))?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     println!("=== 回复 ===");
     println!("{}", result.response.text);

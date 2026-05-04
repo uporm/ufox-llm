@@ -36,14 +36,15 @@ impl Default for MediaRef {
     }
 }
 
-/// 提取后的内容需要保留来源元信息，后续会写入 session memory 以支撑追问。
+/// 提取后的内容需要保留来源元信息，后续可接入 thread 级上下文或外部记忆系统。
 #[derive(Debug, Clone)]
 pub(crate) struct ExtractedContent {
     pub parts: Vec<ContentPart>,
+    #[allow(dead_code)]
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
-/// 提取器只服务于会话输入链路，因此保持 crate 内部可见，避免过早暴露扩展面。
+/// 提取器只服务于线程输入链路，因此保持 crate 内部可见，避免过早暴露扩展面。
 #[async_trait]
 pub(crate) trait MediaExtractor: Send + Sync {
     async fn extract(
@@ -114,21 +115,21 @@ async fn read_as_text(source: &MediaSource) -> Result<String, ArcError> {
     match source {
         MediaSource::File { path } => tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| ArcError::Session(format!("failed to read {}: {e}", path.display()))),
+            .map_err(|e| ArcError::Thread(format!("failed to read {}: {e}", path.display()))),
         MediaSource::Url { url } => {
             let text = reqwest::get(url.as_str())
                 .await
-                .map_err(|e| ArcError::Session(format!("fetch document URL '{url}': {e}")))?
+                .map_err(|e| ArcError::Thread(format!("fetch document URL '{url}': {e}")))?
                 .error_for_status()
                 .map_err(|e| {
-                    ArcError::Session(format!("document URL '{url}' returned error: {e}"))
+                    ArcError::Thread(format!("document URL '{url}' returned error: {e}"))
                 })?
                 .text()
                 .await
-                .map_err(|e| ArcError::Session(format!("read document URL '{url}' body: {e}")))?;
+                .map_err(|e| ArcError::Thread(format!("read document URL '{url}' body: {e}")))?;
             Ok(text)
         }
-        MediaSource::Base64 { mime_type, .. } => Err(ArcError::Session(format!(
+        MediaSource::Base64 { mime_type, .. } => Err(ArcError::Thread(format!(
             "base64 text extraction not supported for mime_type '{mime_type}'; provide a File or URL source"
         ))),
     }

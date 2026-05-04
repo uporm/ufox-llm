@@ -9,12 +9,12 @@ pub enum ArcError {
     #[error("tool error: {tool} — {message}")]
     Tool { tool: String, message: String },
 
-    /// 同一会话收到并发写入请求时触发。
-    #[error("session is currently busy processing another request")]
-    SessionBusy,
+    /// 同一线程收到并发写入请求时触发。
+    #[error("thread is currently busy processing another request")]
+    ThreadBusy,
 
-    #[error("session error: {0}")]
-    Session(String),
+    #[error("thread error: {0}")]
+    Thread(String),
 
     #[error("timeout after {0:?}")]
     Timeout(Duration),
