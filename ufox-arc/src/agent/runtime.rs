@@ -4,11 +4,10 @@ use ufox_llm::Client;
 
 use super::builder::AgentBuilder;
 use super::config::AgentConfig;
-use super::memory_client::MemoryClient;
 use crate::error::ArcError;
 use crate::interrupt::InterruptHandler;
-use crate::memory::MemoryStore;
-use crate::run::{RunEventStream, RunInput, RunRequest, RunResult, run_once, run_stream};
+use crate::memory::{MemoryClient, MemoryProvider};
+use crate::run::{RunEventStream, RunInput, RunResult, run_once, run_stream};
 use crate::thread::{Thread, ThreadId, UserId};
 use crate::tools::ToolManager;
 
@@ -21,7 +20,7 @@ pub struct Agent {
     pub(crate) instructions: Option<String>,
     pub(crate) config: AgentConfig,
     pub(crate) tools: Option<Arc<ToolManager>>,
-    pub(crate) memory: Option<Arc<dyn MemoryStore>>,
+    pub(crate) memory: Option<Arc<dyn MemoryProvider>>,
     pub(crate) interrupt_handler: Option<Arc<dyn InterruptHandler>>,
 }
 
@@ -41,30 +40,37 @@ impl Agent {
         self.thread(user_id, ThreadId::new())
     }
 
-    /// 返回记忆门面；若未配置记忆存储则返回错误。
+    /// 返回记忆门面；若未配置记忆提供器则返回错误。
     pub fn memory(&self) -> Result<MemoryClient, ArcError> {
-        let store = self
+        let provider = self
             .memory
             .as_ref()
             .cloned()
-            .ok_or_else(|| ArcError::Memory("no memory store configured".into()))?;
-        Ok(MemoryClient::new(store))
+            .ok_or_else(|| ArcError::Memory("no memory provider configured".into()))?;
+        Ok(MemoryClient::new(provider))
     }
 
     /// 在给定线程上执行一次运行。
+    ///
+    /// 本次运行使用当前 `Agent` 持有的 `AgentConfig`，不再支持请求级覆盖。
     pub async fn run<I>(&self, thread: &Thread, input: I) -> Result<RunResult, ArcError>
     where
         I: Into<RunInput>,
     {
-        run_once(self, thread, RunRequest::new(input)).await
+        run_once(self, thread, input.into()).await
     }
 
     /// 在给定线程上执行一次流式运行。
-    pub async fn run_stream<I>(&self, thread: &Thread, input: I) -> Result<RunEventStream, ArcError>
+    ///
+    /// 本次运行使用当前 `Agent` 持有的 `AgentConfig`，不再支持请求级覆盖。
+    pub async fn run_stream<I>(
+        &self,
+        thread: &Thread,
+        input: I,
+    ) -> Result<RunEventStream, ArcError>
     where
         I: Into<RunInput>,
     {
-        run_stream(self, thread, RunRequest::new(input)).await
+        run_stream(self, thread, input.into()).await
     }
-
 }

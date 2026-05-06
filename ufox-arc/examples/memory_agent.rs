@@ -1,9 +1,9 @@
 /// 演示 Phase 4 记忆系统：
 /// 1. 使用 InMemory 后端写入会话记忆 / 用户偏好
-/// 2. 新会话通过 enable_perceive 自动检索记忆
-/// 3. 也展示 SqliteMemory 的跨进程持久化路径
+/// 2. 新会话自动检索记忆（配置了 memory provider 即启用 Perceive）
+/// 3. 也展示 SqliteBackend 的跨进程持久化路径
 use anyhow::Result;
-use ufox_arc::{Agent, ArcError, InMemoryStore, MemoryScope, SqliteMemory};
+use ufox_arc::{Agent, ArcError, InMemoryBackend, MemoryScope, SqliteBackend};
 use ufox_llm::Client;
 
 #[tokio::main]
@@ -22,14 +22,13 @@ async fn main() -> Result<()> {
 }
 
 async fn in_memory_demo() -> Result<()> {
-    let store = InMemoryStore::new();
+    let provider = InMemoryBackend::new();
     let llm = Client::from_env()?;
 
     let agent = Agent::builder()
         .llm(llm)
         .instructions("你是一个助手。如果上下文中有 [Memory Context] 块，请优先使用其中的信息。")
-        .memory(store)
-        .enable_perceive(true)
+        .memory(provider)
         .build()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -97,7 +96,7 @@ async fn in_memory_demo() -> Result<()> {
 
 async fn sqlite_demo() -> Result<()> {
     let db_path = "/tmp/ufox_memory_demo.db";
-    let store = SqliteMemory::open(db_path)
+    let provider = SqliteBackend::open(db_path)
         .await
         .map_err(|e: ArcError| anyhow::anyhow!("{e}"))?;
 
@@ -106,8 +105,7 @@ async fn sqlite_demo() -> Result<()> {
     let agent = Agent::builder()
         .llm(llm)
         .instructions("你是一个助手。")
-        .memory(store)
-        .enable_perceive(true)
+        .memory(provider)
         .build()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 

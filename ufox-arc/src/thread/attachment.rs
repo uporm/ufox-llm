@@ -7,10 +7,10 @@ use uuid::Uuid;
 
 use crate::error::ArcError;
 
-/// 会话可附加的媒体模态。
+/// 会话可附加内容的类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Modality {
+pub enum AttachmentKind {
     Text,
     Image,
     Audio,
@@ -19,18 +19,18 @@ pub enum Modality {
     Document,
 }
 
-/// 已附加媒体在会话中的唯一引用。
+/// 已附加内容在会话中的唯一引用。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MediaRef(pub Uuid);
+pub struct AttachmentRef(pub Uuid);
 
-impl MediaRef {
-    /// 生成新的媒体引用。
+impl AttachmentRef {
+    /// 生成新的附件引用。
     pub fn new() -> Self {
-        MediaRef(Uuid::new_v4())
+        AttachmentRef(Uuid::new_v4())
     }
 }
 
-impl Default for MediaRef {
+impl Default for AttachmentRef {
     fn default() -> Self {
         Self::new()
     }
@@ -50,7 +50,7 @@ pub(crate) trait MediaExtractor: Send + Sync {
     async fn extract(
         &self,
         source: MediaSource,
-        modality: Modality,
+        kind: AttachmentKind,
     ) -> Result<ExtractedContent, ArcError>;
 }
 
@@ -65,7 +65,7 @@ impl MediaExtractor for DefaultExtractor {
     async fn extract(
         &self,
         source: MediaSource,
-        modality: Modality,
+        kind: AttachmentKind,
     ) -> Result<ExtractedContent, ArcError> {
         let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
 
@@ -87,21 +87,21 @@ impl MediaExtractor for DefaultExtractor {
             }
         }
 
-        let parts = match modality {
-            Modality::Image => vec![ContentPart::Image(Image {
+        let parts = match kind {
+            AttachmentKind::Image => vec![ContentPart::Image(Image {
                 source: source.clone(),
                 fidelity: None,
             })],
-            Modality::Audio => vec![ContentPart::Audio(Audio {
+            AttachmentKind::Audio => vec![ContentPart::Audio(Audio {
                 format: guess_audio_format(&source),
                 source: source.clone(),
             })],
-            Modality::Video => vec![ContentPart::Video(Video {
+            AttachmentKind::Video => vec![ContentPart::Video(Video {
                 format: guess_video_format(&source),
                 source: source.clone(),
                 sample_frames: None,
             })],
-            Modality::Text | Modality::Document => {
+            AttachmentKind::Text | AttachmentKind::Document => {
                 let text = read_as_text(&source).await?;
                 vec![ContentPart::text(text)]
             }
@@ -182,7 +182,10 @@ mod tests {
         let source = MediaSource::Url {
             url: "https://example.com/photo.jpg".into(),
         };
-        let result = extractor.extract(source, Modality::Image).await.unwrap();
+        let result = extractor
+            .extract(source, AttachmentKind::Image)
+            .await
+            .unwrap();
         assert_eq!(result.parts.len(), 1);
         assert!(matches!(result.parts[0], ContentPart::Image(_)));
     }
@@ -196,7 +199,10 @@ mod tests {
         let source = MediaSource::File {
             path: tmp.path().to_path_buf(),
         };
-        let result = extractor.extract(source, Modality::Text).await.unwrap();
+        let result = extractor
+            .extract(source, AttachmentKind::Text)
+            .await
+            .unwrap();
         assert_eq!(result.parts.len(), 1);
         if let ContentPart::Text(t) = &result.parts[0] {
             assert!(t.text.contains("Hello, multimodal!"));
@@ -215,7 +221,7 @@ mod tests {
             path: tmp.path().to_path_buf(),
         };
         let result = extractor
-            .extract(source.clone(), Modality::Document)
+            .extract(source.clone(), AttachmentKind::Document)
             .await
             .unwrap();
         assert!(result.metadata.contains_key("file_path"));
@@ -253,7 +259,10 @@ mod tests {
         let url = format!("{}/doc.txt", server.uri());
         let extractor = DefaultExtractor;
         let source = MediaSource::Url { url };
-        let result = extractor.extract(source, Modality::Document).await.unwrap();
+        let result = extractor
+            .extract(source, AttachmentKind::Document)
+            .await
+            .unwrap();
         if let ContentPart::Text(t) = &result.parts[0] {
             assert!(t.text.contains("fetched document content"));
         } else {

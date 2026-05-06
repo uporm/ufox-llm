@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
 use ufox_arc::tools::{Tool, ToolError, ToolSpec};
-use ufox_arc::{Agent, ArcError, ExecutionState};
+use ufox_arc::{Agent, AgentConfig, ArcError, ExecutionState};
 use ufox_llm::{Provider, ToolResultPayload};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -92,6 +92,11 @@ async fn stream_simple_yields_chunks_and_completed() {
                 .build()
                 .unwrap(),
         )
+        // 关闭 reflect，确保流式测试只覆盖目标事件序列。
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .build()
         .unwrap();
 
@@ -146,6 +151,10 @@ async fn stream_tool_call_emits_act_step_and_completes() {
                 .build()
                 .unwrap(),
         )
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .tool(EchoTool)
         .build()
         .unwrap();
@@ -192,6 +201,10 @@ async fn stream_thread_busy_returns_error() {
                 .build()
                 .unwrap(),
         )
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .build()
         .unwrap();
 

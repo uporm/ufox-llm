@@ -1,18 +1,18 @@
-use crate::memory::{Memory, MemoryFilter, MemoryScope, MemoryStore};
+use crate::memory::{Memory, MemoryFilter, MemoryScope, MemoryProvider};
 use crate::thread::{ThreadId, UserId};
 
 /// 检索上下文记忆：先取线程记忆，再补充用户记忆，按时间倒序合并。
 ///
 /// `limit` 为总条数上限（线程与用户各占一半，不足时自动补另一半）。
 pub async fn retrieve_context(
-    store: &dyn MemoryStore,
+    provider: &dyn MemoryProvider,
     thread_id: &ThreadId,
     user_id: &UserId,
     limit: usize,
 ) -> Vec<Memory> {
     let half = (limit / 2).max(1);
 
-    let thread_hits = store
+    let thread_hits = provider
         .find(MemoryFilter {
             scope: Some(MemoryScope::Thread {
                 thread_id: thread_id.clone(),
@@ -23,7 +23,7 @@ pub async fn retrieve_context(
         .await
         .unwrap_or_default();
 
-    let user_hits = store
+    let user_hits = provider
         .find(MemoryFilter {
             scope: Some(MemoryScope::User {
                 user_id: user_id.clone(),

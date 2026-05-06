@@ -31,6 +31,11 @@ fn make_agent(base_url: &str) -> Agent {
                 .unwrap(),
         )
         .instructions("你是测试助手。")
+        // 这些用例依赖精确的 mock 次数与轨迹，关闭 reflect 避免额外模型往返。
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .build()
         .unwrap()
 }
@@ -233,6 +238,10 @@ async fn tool_call_loop_executes_and_returns_final_response() {
                 .unwrap(),
         )
         .instructions("你是测试助手。")
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .tool(EchoTool)
         .build()
         .unwrap();
@@ -282,6 +291,10 @@ async fn hitl_auto_approve_allows_confirmed_tool() {
                 .build()
                 .unwrap(),
         )
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .tool(ConfirmedTool)
         .interrupt_handler(AutoApproveHandler)
         .build()
@@ -329,6 +342,10 @@ async fn dynamic_confirmation_policy_skips_hitl_for_safe_args() {
                 .build()
                 .unwrap(),
         )
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .tool(ConditionalTool)
         .interrupt_handler(CountingInterruptHandler {
             count: count.clone(),
@@ -380,6 +397,10 @@ async fn dynamic_confirmation_policy_rechecks_after_modify() {
                 .build()
                 .unwrap(),
         )
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .tool(ConditionalTool)
         .interrupt_handler(CountingInterruptHandler {
             count: count.clone(),
@@ -422,7 +443,11 @@ async fn max_iterations_returns_error() {
                 .unwrap(),
         )
         .tool(EchoTool)
-        .max_iterations(3)
+        .config(AgentConfig {
+            max_iterations: 3,
+            reflect: None,
+            ..Default::default()
+        })
         .build()
         .unwrap();
 
@@ -459,6 +484,7 @@ async fn timeout_returns_error() {
         )
         .config(AgentConfig {
             timeout: Duration::from_millis(50),
+            reflect: None,
             ..Default::default()
         })
         .build()

@@ -4,14 +4,14 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 
 use crate::error::ArcError;
-use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryStore};
+use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryProvider};
 
 /// 开发期内存后端；进程退出后数据不保留。
-pub struct InMemoryStore {
+pub struct InMemoryBackend {
     data: RwLock<HashMap<MemoryId, Memory>>,
 }
 
-impl Default for InMemoryStore {
+impl Default for InMemoryBackend {
     fn default() -> Self {
         Self {
             data: RwLock::new(HashMap::new()),
@@ -19,14 +19,14 @@ impl Default for InMemoryStore {
     }
 }
 
-impl InMemoryStore {
+impl InMemoryBackend {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
 #[async_trait]
-impl MemoryStore for InMemoryStore {
+impl MemoryProvider for InMemoryBackend {
     async fn insert(&self, memory: Memory) -> Result<MemoryId, ArcError> {
         let id = memory.id;
         self.data
@@ -116,7 +116,7 @@ mod tests {
 
     #[tokio::test]
     async fn insert_and_find_by_scope() {
-        let store = InMemoryStore::new();
+        let store = InMemoryBackend::new();
         let m = thread_memory("s1", "hello thread");
         store.insert(m.clone()).await.unwrap();
 
@@ -135,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn scope_isolation() {
-        let store = InMemoryStore::new();
+        let store = InMemoryBackend::new();
         store
             .insert(thread_memory("s1", "thread data"))
             .await
@@ -157,7 +157,7 @@ mod tests {
 
     #[tokio::test]
     async fn filter_by_tags() {
-        let store = InMemoryStore::new();
+        let store = InMemoryBackend::new();
         let m1 = thread_memory("s1", "tagged").with_tags(["rust", "ai"]);
         let m2 = thread_memory("s1", "not tagged");
         store.insert(m1).await.unwrap();
@@ -176,7 +176,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_memory() {
-        let store = InMemoryStore::new();
+        let store = InMemoryBackend::new();
         let m = thread_memory("s1", "to be removed");
         let id = store.insert(m).await.unwrap();
 

@@ -17,6 +17,11 @@ fn make_agent(base_url: &str) -> Agent {
                 .unwrap(),
         )
         .instructions("你是测试助手。")
+        // 这些测试只验证基础执行轨迹，关闭 reflect 以固定请求次数与 step 结构。
+        .config(AgentConfig {
+            reflect: None,
+            ..Default::default()
+        })
         .build()
         .unwrap()
 }
@@ -94,18 +99,17 @@ async fn multi_turn_chat_accumulates_history() {
 }
 
 #[tokio::test]
-async fn agent_config_defaults_to_simple_mode() {
+async fn agent_config_defaults_are_correct() {
     let config = AgentConfig::default();
-    assert!(!config.enable_perceive);
-    assert!(!config.enable_observe);
-    assert!(!config.enable_reflect);
+    assert!(config.reflect.is_some());
     assert_eq!(config.max_iterations, 10);
 }
 
 #[tokio::test]
-async fn agent_builder_exposes_enable_flags() {
+async fn agent_builder_reflect_config() {
     let server = MockServer::start().await;
-    let agent = Agent::builder()
+    // reflect 已并入 AgentConfig；这里只验证经由 config() 仍可正常构建。
+    let _agent = Agent::builder()
         .llm(
             ufox_llm::Client::builder()
                 .provider(Provider::Compatible)
@@ -115,12 +119,10 @@ async fn agent_builder_exposes_enable_flags() {
                 .build()
                 .unwrap(),
         )
-        .enable_perceive(true)
-        .enable_observe(true)
-        .enable_reflect(true)
+        .config(AgentConfig {
+            reflect: Some(ufox_arc::ReflectConfig::default()),
+            ..Default::default()
+        })
         .build()
         .unwrap();
-
-    // 只验证配置已正确写入 Agent；不实际发起网络请求
-    let _ = agent;
 }

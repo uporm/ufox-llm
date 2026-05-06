@@ -4,7 +4,7 @@
 /// 3. 基于同一 thread 继续追问，无需重复上传附件
 use anyhow::Result;
 use std::io::Write as _;
-use ufox_arc::{Agent, ArcError, InMemoryStore, Modality};
+use ufox_arc::{Agent, ArcError, AttachmentKind, InMemoryBackend};
 use ufox_llm::{Client, MediaSource};
 
 #[tokio::main]
@@ -12,13 +12,12 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let llm = Client::from_env()?;
-    let store = InMemoryStore::new();
+    let provider = InMemoryBackend::new();
 
     let agent = Agent::builder()
         .llm(llm)
         .instructions("你是一个多模态助手，可以理解图片和文档内容。请用中文回答。")
-        .memory(store)
-        .enable_perceive(true)
+        .memory(provider)
         .build()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -31,12 +30,12 @@ async fn main() -> Result<()> {
             MediaSource::Url {
                 url: "https://fastly.picsum.photos/id/294/800/600.jpg?hmac=X4RiVynizog5zMK1YZqNYt7sT1XJVHx4bRv9ZDCpPwI".into(),
             },
-            Modality::Image,
+            AttachmentKind::Image,
             vec!["image".into()],
         )
         .await
         .map_err(|e: ArcError| anyhow::anyhow!("{e}"))?;
-    println!("图片已附加，MediaRef: {}", img_ref.0);
+    println!("图片已附加，AttachmentRef: {}", img_ref.0);
 
     let result = agent
         .run(&thread, "请描述一下刚才附加的图片的内容。")
@@ -66,12 +65,12 @@ async fn main() -> Result<()> {
             MediaSource::File {
                 path: tmp.path().to_path_buf(),
             },
-            Modality::Document,
+            AttachmentKind::Document,
             vec!["document".into(), "ufox".into()],
         )
         .await
         .map_err(|e: ArcError| anyhow::anyhow!("{e}"))?;
-    println!("文档已附加，MediaRef: {}", doc_ref.0);
+    println!("文档已附加，AttachmentRef: {}", doc_ref.0);
 
     // 第一个追问
     let r1 = agent

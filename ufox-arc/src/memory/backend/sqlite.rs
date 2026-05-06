@@ -3,15 +3,15 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 use std::str::FromStr;
 
 use crate::error::ArcError;
-use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryScope, MemoryStore};
+use crate::memory::{Memory, MemoryFilter, MemoryId, MemoryScope, MemoryProvider};
 use crate::thread::{ThreadId, UserId};
 
 /// SQLite 持久化后端；使用 WAL 模式提升并发读性能。
-pub struct SqliteMemory {
+pub struct SqliteBackend {
     pool: SqlitePool,
 }
 
-impl SqliteMemory {
+impl SqliteBackend {
     /// 打开（或创建）位于 `path` 的 SQLite 数据库，并运行 schema 迁移。
     pub async fn open(path: &str) -> Result<Self, ArcError> {
         let opts = SqliteConnectOptions::from_str(path)
@@ -82,7 +82,7 @@ impl SqliteMemory {
 }
 
 #[async_trait]
-impl MemoryStore for SqliteMemory {
+impl MemoryProvider for SqliteBackend {
     async fn insert(&self, memory: Memory) -> Result<MemoryId, ArcError> {
         let id = memory.id.to_string();
         let (kind, scope_id) = Self::scope_to_row(&memory.scope);
@@ -223,7 +223,7 @@ struct MemoryRow {
 impl MemoryRow {
     fn try_into_memory(self) -> Result<Memory, ArcError> {
         let id = uuid::Uuid::parse_str(&self.id).map_err(|e| ArcError::Memory(e.to_string()))?;
-        let scope = SqliteMemory::row_to_scope(&self.scope_kind, &self.scope_id);
+        let scope = SqliteBackend::row_to_scope(&self.scope_kind, &self.scope_id);
         let metadata: std::collections::HashMap<String, serde_json::Value> =
             serde_json::from_str(&self.metadata).map_err(|e| ArcError::Memory(e.to_string()))?;
         let tags: Vec<String> =
@@ -251,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_insert_find_remove() {
-        let store = SqliteMemory::in_memory().await.unwrap();
+        let store = SqliteBackend::in_memory().await.unwrap();
 
         let m = Memory::new_thread(ThreadId("s1".into()), "sqlite test");
         let id = store.insert(m.clone()).await.unwrap();
@@ -275,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_replace() {
-        let store = SqliteMemory::in_memory().await.unwrap();
+        let store = SqliteBackend::in_memory().await.unwrap();
         let m = Memory::new_user(UserId("u1".into()), "original");
         let id = store.insert(m.clone()).await.unwrap();
 
@@ -292,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_cross_thread_scope_isolation() {
-        let store = SqliteMemory::in_memory().await.unwrap();
+        let store = SqliteBackend::in_memory().await.unwrap();
         store
             .insert(Memory::new_thread(ThreadId("s1".into()), "s1 data"))
             .await

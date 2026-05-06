@@ -1,5 +1,35 @@
 use std::time::Duration;
 
+/// 默认反思提示词：要求 LLM 以 VERDICT/REASON 格式评估当前轨迹。
+const DEFAULT_REFLECT_PROMPT: &str = concat!(
+    "请回顾上面的对话与工具使用情况。 ",
+    "智能体是否已经成功完成了用户目标？ ",
+    "请严格按照以下格式回复： ",
+    "VERDICT: SUCCESS ",
+    "REASON: 简要说明原因 ",
+    "如果智能体失败了，或者应该尝试不同的方法，请回复： ",
+    "VERDICT: RETRY ",
+    "REASON: 说明哪里出了问题，以及下一步应如何调整"
+);
+
+/// Reflect 步骤配置。
+#[derive(Debug, Clone)]
+pub struct ReflectConfig {
+    /// 发给 LLM 的反思提示词。
+    pub prompt: String,
+    /// 最多允许重试的次数，防止无限循环。
+    pub max_retries: usize,
+}
+
+impl Default for ReflectConfig {
+    fn default() -> Self {
+        Self {
+            prompt: DEFAULT_REFLECT_PROMPT.to_string(),
+            max_retries: 2,
+        }
+    }
+}
+
 /// Agent 运行参数。
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -9,24 +39,17 @@ pub struct AgentConfig {
     pub timeout: Duration,
     /// 应用于 LLM 请求的采样温度；`None` 则使用模型默认值。
     pub temperature: Option<f32>,
-    /// 是否启用 Perceive 步骤（从记忆检索上下文）。
-    pub enable_perceive: bool,
-    /// 是否启用 Observe 步骤（格式化工具结果）。
-    pub enable_observe: bool,
-    /// 是否启用 Reflect 步骤（自我评估是否重试）。
-    pub enable_reflect: bool,
+    /// Reflect 步骤配置；`None` 表示禁用。
+    pub reflect: Option<ReflectConfig>,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_iterations: 10,
-            timeout: Duration::from_secs(300),
+            timeout: Duration::from_secs(600),
             temperature: None,
-            // 默认简单模式：只运行 Think/Act/Completion
-            enable_perceive: false,
-            enable_observe: false,
-            enable_reflect: false,
+            reflect: Some(ReflectConfig::default()),
         }
     }
 }

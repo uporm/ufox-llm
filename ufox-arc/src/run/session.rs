@@ -4,7 +4,7 @@ use std::time::Duration;
 use futures::Stream;
 use ufox_llm::{ChatChunk, ChatResponse, ContentPart, Message, Role, Usage};
 
-use crate::agent::execution::{ExecutionState, ExecutionStep};
+use super::trace::{ExecutionState, ExecutionStep};
 use crate::error::ArcError;
 use crate::thread::{ThreadId, UserId};
 
@@ -61,25 +61,6 @@ impl RunInput {
     }
 }
 
-/// 单次运行请求。
-pub struct RunRequest {
-    pub input: RunInput,
-    pub temperature: Option<f32>,
-    pub max_iterations: Option<usize>,
-    pub timeout: Option<Duration>,
-}
-
-impl RunRequest {
-    pub fn new(input: impl Into<RunInput>) -> Self {
-        Self {
-            input: input.into(),
-            temperature: None,
-            max_iterations: None,
-            timeout: None,
-        }
-    }
-}
-
 /// 单次运行的完整轨迹。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunTrace {
@@ -128,10 +109,3 @@ impl Stream for RunEventStream {
         self.inner.as_mut().poll_next(cx)
     }
 }
-
-pub type RunStatus = ExecutionState;
-pub type RunStep = ExecutionStep;
-pub type ExecutionResult = RunResult;
-pub type ExecutionTrace = RunTrace;
-pub type ExecutionEvent = RunEvent;
-pub type ExecutionEventStream = RunEventStream;

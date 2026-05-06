@@ -475,16 +475,16 @@ async fn main() -> anyhow::Result<()> {
 - **不引入消息总线（MessageBus）**：v2 不需要异步事件驱动的消息总线，调用方式就足够
 - **不引入 `AgentRole` 枚举**：协调器和成员的区别只在于是否被注入了委派工具，不需要专门的角色概念
 - **不引入 `AgentLoop` 新类型**：AgentTeam 复用同一个执行循环，不需要单独定义
-- **成员 Agent 的 Memory 是独立的**：如果需要共享记忆，在构建时注入同一个 `MemoryStore` 实例即可
+- **成员 Agent 的 Memory 是独立的**：如果需要共享记忆，在构建时注入同一个 `MemoryProvider` 实例即可
 
 ### 15.6 共享记忆（可选）
 
-如果协调器和成员需要共享用户级记忆，在构建时注入同一个 `MemoryStore`：
+如果协调器和成员需要共享用户级记忆，在构建时注入同一个 `MemoryProvider`：
 
 ```rust
 use std::sync::Arc;
 
-let shared_memory = Arc::new(SqliteMemory::open("./team_memory.db").await?);
+let shared_memory = Arc::new(SqliteBackend::open("./team_memory.db").await?);
 
 let researcher = Agent::builder()
     .llm(Client::from_env()?)
@@ -498,7 +498,7 @@ let coder = Agent::builder()
 
 let coordinator = Agent::builder()
     .llm(client)
-    .memory(shared_memory)  // 协调器也共享同一个 MemoryStore
+    .memory(shared_memory)  // 协调器也共享同一个 MemoryProvider
     .build()?;
 ```
 
@@ -651,7 +651,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 - 协调器能正确路由任务到成员 Agent
 - 成员执行结果正确流回协调器
 - 协调器能汇总多个成员结果并输出最终回复
-- 支持共享 `MemoryStore` 实现团队级记忆
+- 支持共享 `MemoryProvider` 实现团队级记忆
 - 至少有一个协调器 + 2 个成员的完整示例
 
 **建议落点：**
@@ -688,7 +688,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 - [ ] `team.run()` 能完整执行协调器 → 成员 → 协调器的流程
 - [ ] 成员 Agent 拥有独立 Thread
 - [ ] 成员执行结果正确转换为 `ToolResult`
-- [ ] 共享 `MemoryStore` 可以在团队成员间生效
+- [ ] 共享 `MemoryProvider` 可以在团队成员间生效
 - [ ] `examples/multi_agent_team.rs` 可以运行
 - [ ] 成员不存在时返回清晰错误
 
@@ -700,7 +700,7 @@ v2 在 v1 阶段 7 完成后继续推进，阶段编号延续：
 
 ### Q8: 多 Agent 中的成员 Agent 能不能共享会话上下文？
 
-**A:** 不能，也不应该。成员 Agent 拥有独立 Thread，避免状态污染。如果需要共享信息，通过两种方式：（1）协调器在委派时把上下文摘要传给成员；（2）共享同一个 `MemoryStore` 实例（见第 15.6 节）。
+**A:** 不能，也不应该。成员 Agent 拥有独立 Thread，避免状态污染。如果需要共享信息，通过两种方式：（1）协调器在委派时把上下文摘要传给成员；（2）共享同一个 `MemoryProvider` 实例（见第 15.6 节）。
 
 ### Q9: 为什么多 Agent 不用消息总线（MessageBus）？
 

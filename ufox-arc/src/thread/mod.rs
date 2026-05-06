@@ -1,22 +1,22 @@
-pub mod media;
+pub mod attachment;
 pub mod store;
-pub mod thread_store;
 
-pub use media::{MediaRef, Modality};
-pub use store::ThreadStore;
-pub use thread_store::{InMemoryThreadStore, SqliteThreadStore};
+pub use attachment::{AttachmentKind, AttachmentRef};
+pub use store::{InMemoryThreadStore, SqliteThreadStore, ThreadStore};
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use ufox_llm::{Message, Role};
+use tokio::sync::{Mutex, RwLock};
 use ufox_llm::MediaSource;
+use ufox_llm::{Message, Role};
 
-use self::media::{DefaultExtractor, MediaExtractor};
+use self::attachment::{DefaultExtractor, MediaExtractor};
 use crate::error::ArcError;
 
-const ATTACHED_MEDIA_MESSAGE_NAME: &str = "attached_media";
+// 保留既有消息名，避免影响依赖该标记的历史数据或下游逻辑。
+const ATTACHED_ATTACHMENT_MESSAGE_NAME: &str = "attached_media";
 
 /// 用户的唯一标识，用于跨线程记忆归属。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -96,9 +96,9 @@ pub struct ThreadSnapshot {
 
 /// 线程内部共享状态，通过 `Arc` 在运行与调用方之间传递。
 pub(crate) struct ThreadShared {
-    pub messages: tokio::sync::Mutex<Vec<Message>>,
-    pub metadata: tokio::sync::RwLock<serde_json::Map<String, serde_json::Value>>,
-    pub state: tokio::sync::Mutex<ThreadState>,
+    pub messages: Mutex<Vec<Message>>,
+    pub metadata: RwLock<serde_json::Map<String, serde_json::Value>>,
+    pub state: Mutex<ThreadState>,
 }
 
 /// 单个用户线程，只持有消息历史和运行状态。
@@ -115,9 +115,9 @@ impl Thread {
             user_id,
             thread_id,
             shared: Arc::new(ThreadShared {
-                messages: tokio::sync::Mutex::new(Vec::new()),
-                metadata: tokio::sync::RwLock::new(serde_json::Map::new()),
-                state: tokio::sync::Mutex::new(ThreadState::Idle),
+                messages: Mutex::new(Vec::new()),
+                metadata: RwLock::new(serde_json::Map::new()),
+                state: Mutex::new(ThreadState::Idle),
             }),
         }
     }
@@ -163,23 +163,23 @@ impl Thread {
         self.shared.messages.lock().await.push(message);
     }
 
-    /// 将媒体内容附加到当前线程。
+    /// 将附件内容附加到当前线程。
     pub async fn attach(
         &self,
         source: MediaSource,
-        modality: Modality,
+        kind: AttachmentKind,
         _tags: Vec<String>,
-    ) -> Result<MediaRef, ArcError> {
+    ) -> Result<AttachmentRef, ArcError> {
         let extractor = DefaultExtractor;
-        let extracted = extractor.extract(source, modality).await?;
+        let extracted = extractor.extract(source, kind).await?;
 
         self.shared.messages.lock().await.push(Message {
             role: Role::User,
             content: extracted.parts,
-            name: Some(ATTACHED_MEDIA_MESSAGE_NAME.to_string()),
+            name: Some(ATTACHED_ATTACHMENT_MESSAGE_NAME.to_string()),
         });
 
-        Ok(MediaRef::new())
+        Ok(AttachmentRef::new())
     }
 
     pub(crate) async fn try_start_run(&self) -> Result<(), ArcError> {

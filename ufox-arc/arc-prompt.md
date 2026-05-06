@@ -218,7 +218,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             max_iterations: 10,
-            timeout: Duration::from_secs(300),
+            timeout: Duration::from_secs(600),
             // 默认简单模式：只有 Think/Act/Completion
             enable_perceive: false,
             enable_observe: false,
@@ -265,7 +265,7 @@ impl Default for ExecutionConfig {
 
 **本阶段必须实现：**
 
-- `MemoryStore` trait（统一接口，通过 `MemoryScope` 区分用户/会话）
+- `MemoryProvider` trait（统一接口，通过 `MemoryScope` 区分用户/会话）
 - `Memory`、`MemoryFilter`、`MemoryScope`
 - `MemoryScope::User` 与 `MemoryScope::Thread` 两层作用域
 - 开发期内存后端
@@ -468,7 +468,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             max_iterations: 10,
-            timeout: Duration::from_secs(300),
+            timeout: Duration::from_secs(600),
             // 默认简单模式：只有 Think/Act/Completion
             enable_perceive: false,
             enable_observe: false,
@@ -659,7 +659,7 @@ pub enum MemoryScope {
 }
 
 #[async_trait]
-pub trait MemoryStore: Send + Sync {
+pub trait MemoryProvider: Send + Sync {
     async fn insert(&mut self, memory: Memory) -> Result<MemoryId>;
     async fn find(&self, filter: MemoryFilter) -> Result<Vec<Memory>>;
     async fn replace(&mut self, id: MemoryId, memory: Memory) -> Result<()>;
@@ -695,8 +695,8 @@ pub struct Memory {
 
 要求：
 
-- 统一使用一个 `MemoryStore` trait，通过 `MemoryScope` 区分用户/会话
-- **不要拆分成 `UserMemoryStore` 和 `SessionMemoryStore` 两个 trait**
+- 统一使用一个 `MemoryProvider` trait，通过 `MemoryScope` 区分用户/会话
+- **不要拆分成 `UserMemoryProvider` 和 `SessionMemoryProvider` 两个 trait**
 - 默认保存引用与派生结果，而不是大块原始二进制
 - 支持按标签、时间范围过滤
 - 检索策略综合时效性、相关性与重要性
@@ -709,7 +709,7 @@ pub struct Memory {
 // 直接复用 ufox-llm 的类型
 pub use ufox_llm::{ContentPart, Image, Audio, Video, MediaSource};
 
-pub enum Modality {
+pub enum AttachmentKind {
     Text,
     Image,
     Audio,
@@ -718,7 +718,7 @@ pub enum Modality {
 }
 
 pub struct ExtractedContent {
-    pub modality: Modality,
+    pub kind: AttachmentKind,
     pub parts: Vec<ContentPart>,
     pub source: MediaSource,
     pub metadata: HashMap<String, serde_json::Value>,
@@ -969,12 +969,12 @@ async fn main() -> anyhow::Result<()> {
 ### 8.4 记忆读写
 
 ```rust
-use ufox_arc::{memory::SqliteMemory, Agent};
+use ufox_arc::{memory::SqliteBackend, Agent};
 use ufox_llm::Client;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let memory = SqliteMemory::open("./agent_memory.db").await?;
+    let memory = SqliteBackend::open("./agent_memory.db").await?;
     let client = Client::from_env()?;
 
     let agent = Agent::builder()
@@ -1068,7 +1068,7 @@ async fn main() -> anyhow::Result<()> {
 ```toml
 [agent]
 max_iterations = 10
-timeout_seconds = 300
+timeout_seconds = 600
 temperature = 0.7
 enable_multimodal = true
 
@@ -1340,7 +1340,7 @@ AI 工具在完成每个阶段后，应对照以下清单自检：
 
 ### 阶段 4 检查清单
 
-- [ ] `MemoryStore` trait 已定义
+- [ ] `MemoryProvider` trait 已定义
 - [ ] `MemoryScope` 可以区分用户/会话
 - [ ] 内存后端可以正常读写
 - [ ] SQLite 后端可以持久化
@@ -1376,9 +1376,9 @@ AI 工具在完成每个阶段后，应对照以下清单自检：
 
 **A:** `UserHandle` 只是 `user_id` 的包装，除了作为跳板没有实际价值。直接 `agent.thread(user_id, thread_id)` 更简洁。
 
-### Q2: 为什么不拆分 `UserMemoryStore` 和 `ThreadMemoryStore`？
+### Q2: 为什么不拆分 `UserMemoryProvider` 和 `ThreadMemoryProvider`？
 
-**A:** 统一使用一个 `MemoryStore` trait，通过 `MemoryScope` 区分用户/线程，可以简化实现和使用。
+**A:** 统一使用一个 `MemoryProvider` trait，通过 `MemoryScope` 区分用户/线程，可以简化实现和使用。
 
 ### Q3: 为什么不引入 `ExecutionEngine` 作为公开 API？
 

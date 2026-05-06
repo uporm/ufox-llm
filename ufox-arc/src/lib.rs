@@ -7,21 +7,22 @@ pub mod run;
 pub mod thread;
 pub mod tools;
 
-pub use agent::{
-    Agent, AgentBuilder, AgentConfig, ExecutionState, ExecutionStep, Memory, MemoryClient,
-    StepInput, StepKind, StepOutput,
-};
+pub use agent::{Agent, AgentBuilder, AgentConfig, ReflectConfig};
 pub use error::ArcError;
 pub use interrupt::{
     AutoApproveHandler, CliInterruptHandler, InterruptDecision, InterruptHandler, InterruptReason,
 };
-pub use memory::{InMemoryStore, MemoryFilter, MemoryId, MemoryScope, MemoryStore, SqliteMemory};
+pub use memory::{
+    InMemoryBackend, MemoryClient, MemoryFilter, MemoryId, MemoryProvider, MemoryScope,
+    SqliteBackend,
+};
 pub use run::{
-    RunEvent, RunEventStream, RunId, RunInput, RunRequest, RunResult, RunStatus, RunStep, RunTrace,
+    ExecutionState, ExecutionStep, Memory, RunEvent, RunEventStream, RunId, RunInput, RunResult,
+    RunTrace, StepInput, StepKind, StepOutput,
 };
 pub use thread::{
-    InMemoryThreadStore, MediaRef, Modality, SqliteThreadStore, Thread, ThreadId, ThreadSnapshot,
-    ThreadStore, UserId,
+    AttachmentKind, AttachmentRef, InMemoryThreadStore, SqliteThreadStore, Thread, ThreadId,
+    ThreadSnapshot, ThreadStore, UserId,
 };
 pub use tools::{
     Tool, ToolError, ToolSpec,

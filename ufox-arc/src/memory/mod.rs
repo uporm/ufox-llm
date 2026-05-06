@@ -1,8 +1,10 @@
+pub mod client;
 pub mod backend;
 pub mod strategy;
 
-pub use backend::in_memory::InMemoryStore;
-pub use backend::sqlite::SqliteMemory;
+pub use client::MemoryClient;
+pub use backend::in_memory::InMemoryBackend;
+pub use backend::sqlite::SqliteBackend;
 
 use std::collections::HashMap;
 
@@ -83,9 +85,9 @@ pub struct MemoryFilter {
     pub limit: Option<usize>,
 }
 
-/// 记忆存储统一接口；通过 `MemoryScope` 区分会话/用户两个层级。
+/// 记忆提供器统一接口；通过 `MemoryScope` 区分会话/用户两个层级。
 #[async_trait]
-pub trait MemoryStore: Send + Sync {
+pub trait MemoryProvider: Send + Sync {
     async fn insert(&self, memory: Memory) -> Result<MemoryId, ArcError>;
     async fn find(&self, filter: MemoryFilter) -> Result<Vec<Memory>, ArcError>;
     async fn replace(&self, id: MemoryId, memory: Memory) -> Result<(), ArcError>;
